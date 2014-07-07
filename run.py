@@ -11,6 +11,7 @@ circle = primitives.Circle(100, 100, stroke=1, width=10, color=(255, 255, 0, 1))
 
 class Node:
     type = object()
+
     def __init__(self, id, x, y):
         self.id, self.x, self.y = id, x, y
         self.nbors = []
@@ -20,9 +21,12 @@ class Node:
         circle.color = (255, 255, 0, 1)
         circle.render()
 
+    def __repr__(self):
+        return str(self.id)
 
 class Signal(Node):
     type = object()
+
     def draw(self):
         circle.x, circle.y = self.x, self.y
         circle.color = (255, 0, 0, 1)
@@ -85,6 +89,10 @@ class Graph:
                     break                              # But it's ok if this is the last iteration.
         self.nodes_list.remove(node)
         del self.nodes[node.id]
+        if node.type is Signal.type:
+            if len(node.nbors) != 2:
+                raise Exception("Signals must have 2 nbors!")
+            graph.connectNodes(*node.nbors)
 
 
 class MouseTool(object):
@@ -188,29 +196,37 @@ class SignalTool(MouseTool):
 
     def reset(self):
         self.hover = None
+        self.hover_signal = None
 
     def click(self, x, y):
-        if self.hover:
+        if self.hover and not self.hover_signal:
             graph.insertNode(*self.hover, signal=True)
 
     def rightClick(self, x, y):
-        #if self.hover[0][2] and self.hover[1] is None:
-        #    graph.deleteNode(self.hover[0][2])
-        pass
+        if self.hover_signal:
+            graph.deleteNode(self.hover_signal)
 
     def updateHover(self):
+        min_dist = None
         for node in graph.nodes_list:
             dist = utils.getDistance((mouse.x, mouse.y), (node.x, node.y))
             if dist < self.signal_spacing:
-                self.hover = None
-                return
+                if min_dist is None:
+                    min_dist = (dist, None, None, (node.x, node.y, node))
+                elif dist < min_dist[0]:
+                    min_dist = (dist, None, None, (node.x, node.y, node))
 
-        min_dist = utils.getPointClosestToEdge(graph.nodes_pairs, mouse.x, mouse.y)
-
-        if min_dist is not None and min_dist[0] < self.snap_distance:
+        if min_dist is not None:
+            self.hover_signal = min_dist[3][2]
             self.hover = (min_dist[3], min_dist[1], min_dist[2])
         else:
-            self.hover = None
+            self.hover_signal = None
+            min_dist = utils.getPointClosestToEdge(graph.nodes_pairs, mouse.x, mouse.y)
+
+            if min_dist is not None and min_dist[0] < self.snap_distance:
+                self.hover = (min_dist[3], min_dist[1], min_dist[2])
+            else:
+                self.hover = None
 
     def draw(self):
         if self.hover:
