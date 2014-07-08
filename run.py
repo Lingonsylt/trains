@@ -7,9 +7,10 @@ import primitives
 mouse.x = 0
 mouse.y = 0
 circle = primitives.Circle(100, 100, stroke=1, width=10, color=(255, 255, 0, 1))
+tiny_circle = primitives.Circle(100, 100, stroke=1, width=4, color=(255, 255, 0, 1))
 
 
-class Node:
+class Node(object):
     type = object()
 
     def __init__(self, id, x, y):
@@ -24,13 +25,45 @@ class Node:
     def __repr__(self):
         return str(self.id)
 
+
 class Signal(Node):
     type = object()
 
+    def __init__(self, id, x, y, nw, se):
+        super(Signal, self).__init__(id, x, y)
+        self.nw_node, self.se_node = nw, se
+        self.nw = self.se = True
+
+    def toggleDirection(self):
+        if self.nw is not None and self.se is not None:
+            self.se = None
+        elif self.se is None:
+            self.se = True
+            self.nw = None
+        else:
+            self.nw = True
+            self.se = True
+
     def draw(self):
-        circle.x, circle.y = self.x, self.y
-        circle.color = (255, 0, 0, 1)
-        circle.render()
+        if self.nw is not None:
+            tiny_circle.x, tiny_circle.y = utils.getPointRelativeLine((self.x, self.y), (-5, -5),
+                                                                      (self.nw_node.x, self.nw_node.y),
+                                                                      (self.se_node.x, self.se_node.y))
+            if self.nw is True:
+                tiny_circle.color = (0, 255, 0, 1)
+            else:
+                tiny_circle.color = (255, 0, 0, 1)
+            tiny_circle.render()
+
+        if self.se is not None:
+            tiny_circle.x, tiny_circle.y = utils.getPointRelativeLine((self.x, self.y), (5, 5),
+                                                                      (self.nw_node.x, self.nw_node.y),
+                                                                      (self.se_node.x, self.se_node.y))
+            if self.se is True:
+                tiny_circle.color = (0, 255, 0, 1)
+            else:
+                tiny_circle.color = (255, 0, 0, 1)
+            tiny_circle.render()
 
 
 class Graph:
@@ -41,9 +74,8 @@ class Graph:
         self.node_lines = []
         self.next_node_id = 0
 
-    def createNode(self, x, y, signal=False):
-        node_cls = Signal if signal else Node
-        node = node_cls(self.next_node_id, x, y)
+    def createNode(self, x, y, signal=None):
+        node = Node(self.next_node_id, x, y) if not signal else Signal(self.next_node_id, x, y, *signal)
         self.next_node_id += 1
         self.nodes[node.id] = node
         self.nodes_list.append(node)
@@ -72,6 +104,8 @@ class Graph:
             from_.nbors.remove(to)
         if from_ in to.nbors:
             to.nbors.remove(from_)
+        if signal:
+            signal = (from_, to) if (from_.x, from_.y) < (to.x, to.y) else (to, from_)
         new_node = self.createNode(point[0], point[1], signal)
         self.connectNodes(from_, new_node)
         self.connectNodes(new_node, to)
@@ -87,13 +121,23 @@ class Graph:
                 if node_line.pair == pair:
                     self.node_lines.remove(node_line)  # Danger danger! List mutation within loop.
                     break                              # But it's ok if this is the last iteration.
+            #if nbor.type is Signal.type:
+
         self.nodes_list.remove(node)
         del self.nodes[node.id]
         if node.type is Signal.type:
-            if len(node.nbors) != 2:
-                raise Exception("Signals must have 2 nbors!")
-            graph.connectNodes(*node.nbors)
+            if len(node.nbors) == 2:
+                graph.connectNodes(*node.nbors)
 
+    def deleteEdge(self, from_, to):
+        from_.nbors.remove(to)
+        to.nbors.remove(from_)
+        pair = (from_, to) if from_.id < to.id else (to, from_)
+        self.nodes_pairs.remove(pair)
+        for node_line in self.node_lines:
+            if node_line.pair == pair:
+                self.node_lines.remove(node_line)  # Danger danger! List mutation within loop.
+                break                              # But it's ok if this is the last iteration.
 
 class MouseTool(object):
     id = "mouse"
@@ -130,63 +174,81 @@ class RouteTool(MouseTool):
 
     def reset(self):
         self.last_node = None
-        self.hover = None
+        self.hover_pos = (0, 0)
+        self.hover_edge = None
+        self.hover_node = None
+        self.invalid = True
 
     def click(self, x, y):
-        if self.hover:
-            if self.hover[0][2] and self.hover[1] is None:
-                if self.last_node and self.last_node is not self.hover[0][2]:
-                    graph.connectNodes(self.last_node, self.hover[0][2])
-                self.last_node = self.hover[0][2]
-            else:
-                new_node = graph.insertNode(*self.hover)
-                if self.last_node and self.last_node is not self.hover[1] and self.last_node is not self.hover[2]:
+        if not self.invalid:
+            if self.hover_node:
+                if self.last_node and self.last_node is not self.hover_node:
+                    graph.connectNodes(self.last_node, self.hover_node)
+                self.last_node = self.hover_node
+            elif self.hover_edge:
+                new_node = graph.insertNode(self.hover_pos, *self.hover_edge)
+                if self.last_node and self.last_node not in self.hover_edge:
                     graph.connectNodes(self.last_node, new_node)
                 self.last_node = new_node
-            return
-
-        new_node = graph.createNode(int(x), int(y))  # TODO: Will bring chaos if mouse moved since last updateHover
-        if self.last_node:
-            graph.connectNodes(self.last_node, new_node)
-        self.last_node = new_node
+            else:
+                new_node = graph.createNode(int(x), int(y))  # TODO: Will bring chaos if mouse moved since last updateHover
+                if self.last_node:
+                    graph.connectNodes(self.last_node, new_node)
+                self.last_node = new_node
 
     def rightClick(self, x, y):
         if self.last_node:
             self.last_node = None
-        elif self.hover[0][2] and self.hover[1] is None:
-            graph.deleteNode(self.hover[0][2])
+        elif not self.invalid and not self.hover_node and self.hover_edge:
+            graph.deleteEdge(*self.hover_edge)
 
     def updateHover(self):
-        min_dist = None
+        self.invalid = False
+        self.hover_edge = None
+        self.hover_node = None
+        self.hover_pos = None
+
+        snap_node = None
         for node in graph.nodes_list:
             dist = utils.getDistance((mouse.x, mouse.y), (node.x, node.y))
-            if node.type is Signal.type and dist < self.signal_spacing:
-                self.hover = None
+            if node.type is Signal.type and dist < self.signal_spacing:  # TODO: Signals should only
+                self.hover_pos = mouse.x, mouse.y                        # be invalid along edge
+                self.invalid = True
                 return
 
             if dist < self.snap_distance:
-                if min_dist is None:
-                    min_dist = (dist, None, None, (node.x, node.y, node))
-                elif dist < min_dist[0]:
-                    min_dist = (dist, None, None, (node.x, node.y, node))
+                if snap_node is None:
+                    snap_node = (dist, node)
+                elif dist < snap_node[0]:
+                    snap_node = (dist, node)
 
-        if min_dist is None:
-            min_dist = utils.getPointClosestToEdge(graph.nodes_pairs, mouse.x, mouse.y)
-
-        if min_dist is not None and min_dist[0] < self.snap_distance:
-            self.hover = (min_dist[3], min_dist[1], min_dist[2])
+        if snap_node:
+            self.hover_pos = snap_node[1].x, snap_node[1].y
+            self.hover_edge = None
+            if self.last_node and snap_node in self.last_node.nbors:
+                self.invalid = True
+            else:
+                self.hover_node = snap_node[1]
         else:
-            self.hover = None
+            snap_edge = utils.getPointClosestToEdge(graph.nodes_pairs, mouse.x, mouse.y)
+            if snap_edge:
+                distance, edge, point = snap_edge
+                if distance < self.snap_distance:
+                    self.hover_pos = point
+                    self.hover_edge = edge
+                    return
+            self.hover_pos = mouse.x, mouse.y
 
     def draw(self):
-        if self.hover:
-            circle.x, circle.y = self.hover[0][:2]
+        circle.x, circle.y = self.hover_pos
+        if self.invalid:
+            circle.color = (1, 0, 0, 1)
+        else:
             circle.color = (0.5, 0.5, 1, 1)
-            circle.render()
+        circle.render()
 
         if self.last_node:
-            to = (mouse.x, mouse.y) if not self.hover else self.hover[0][:2]
-            primitives.Line((self.last_node.x, self.last_node.y), to, stroke=1,
+            primitives.Line((self.last_node.x, self.last_node.y), self.hover_pos, stroke=1,
                             color=(0.5, 0.5, 0, 1)).render()
 
 
@@ -196,42 +258,58 @@ class SignalTool(MouseTool):
 
     def reset(self):
         self.hover = None
-        self.hover_signal = None
+        self.hover_node = None
 
     def click(self, x, y):
-        if self.hover and not self.hover_signal:
-            graph.insertNode(*self.hover, signal=True)
+        if not self.invalid:
+            if self.hover_edge:
+                graph.insertNode(self.hover_pos, *self.hover_edge, signal=True)
+            elif self.hover_node:
+                self.hover_node.toggleDirection()
 
     def rightClick(self, x, y):
-        if self.hover_signal:
-            graph.deleteNode(self.hover_signal)
+        if self.hover_node:
+            graph.deleteNode(self.hover_node)
 
     def updateHover(self):
-        min_dist = None
+        self.invalid = False
+        self.hover_edge = None
+        self.hover_node = None
+        self.hover_pos = None
+
+        snap_node = None
         for node in graph.nodes_list:
             dist = utils.getDistance((mouse.x, mouse.y), (node.x, node.y))
+            if not node.type is Signal.type and dist < self.signal_spacing:
+                self.hover_pos = mouse.x, mouse.y
+                self.invalid = True
+                return
+
             if dist < self.signal_spacing:
-                if min_dist is None:
-                    min_dist = (dist, None, None, (node.x, node.y, node))
-                elif dist < min_dist[0]:
-                    min_dist = (dist, None, None, (node.x, node.y, node))
+                if snap_node is None:
+                    snap_node = (dist, node)
+                elif dist < snap_node[0]:
+                    snap_node = (dist, node)
 
-        if min_dist is not None:
-            self.hover_signal = min_dist[3][2]
-            self.hover = (min_dist[3], min_dist[1], min_dist[2])
+        if snap_node is not None:
+            self.hover_node = snap_node[1]
+            self.hover_pos = snap_node[1].x, snap_node[1].y
         else:
-            self.hover_signal = None
-            min_dist = utils.getPointClosestToEdge(graph.nodes_pairs, mouse.x, mouse.y)
-
-            if min_dist is not None and min_dist[0] < self.snap_distance:
-                self.hover = (min_dist[3], min_dist[1], min_dist[2])
-            else:
-                self.hover = None
+            snap_edge = utils.getPointClosestToEdge(graph.nodes_pairs, mouse.x, mouse.y)
+            if snap_edge:
+                distance, edge, point = snap_edge
+                if distance < self.snap_distance:
+                    self.hover_edge = edge
+                    self.hover_pos = point
+                    return
 
     def draw(self):
-        if self.hover:
-            circle.x, circle.y = self.hover[0][:2]
-            circle.color = (0.5, 0.5, 1, 1)
+        if self.hover_pos:
+            circle.x, circle.y = self.hover_pos
+            if self.invalid:
+                circle.color = (1, 0, 0, 1)
+            else:
+                circle.color = (0.5, 0.5, 1, 1)
             circle.render()
 
 
@@ -296,7 +374,6 @@ except pyglet.window.NoSuchConfigException:
 
 toolbox = Toolbox()
 graph = Graph()
-last_node = None
 
 @window.event
 def on_draw():
@@ -332,3 +409,7 @@ def update(dt):
 
 pyglet.clock.schedule_interval(update, 1/120.0)
 pyglet.app.run()
+
+# Ta bort ordentligt
+# Visa signalerna bättre i guit
+# Add the mighty pathfinder
