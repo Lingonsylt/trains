@@ -35,3 +35,9 @@ def getPointRelativeLine(start_point, relative_point, line_start, line_end):
     offset_x = (x * math.sin(line_angle * (math.pi / 180)) + y * math.sin((line_angle - 90) * (math.pi / 180)))
     offset_y = (y * math.cos(line_angle * (math.pi / 180)) + y * math.cos((line_angle - 90) * (math.pi / 180)))
     return start_point[0] + offset_x, start_point[1] + offset_y
+
+
+def getPointAlongLine(from_, to, pos):
+    from_x, from_y = from_
+    to_x, to_y = to
+    return from_x + (to_x - from_x) * pos, from_y + (to_y - from_y) * pos
