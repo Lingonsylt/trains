@@ -111,27 +111,37 @@ class Graph:
         self.connectNodes(new_node, to)
         return new_node
 
-    def deleteNode(self, node):
-        for nbor in node.nbors:
-            if node in nbor.nbors:
-                nbor.nbors.remove(node)
-            pair = (node, nbor) if node.id < nbor.id else (nbor, node)
-            self.nodes_pairs.remove(pair)
-            for node_line in self.node_lines:
-                if node_line.pair == pair:
-                    self.node_lines.remove(node_line)  # Danger danger! List mutation within loop.
-                    break                              # But it's ok if this is the last iteration.
-            #if nbor.type is Signal.type:
+    def prune(self, node):
+        if node.type is Signal.type:
+            if len(node.nbors) == 1:
+                graph.deleteNode(node)
+        elif not node.nbors:
+            graph.deleteNode(node)
 
+    def deleteNode(self, node):
         self.nodes_list.remove(node)
         del self.nodes[node.id]
         if node.type is Signal.type:
             if len(node.nbors) == 2:
                 graph.connectNodes(*node.nbors)
 
+        for nbor in node.nbors:
+            pair = (node, nbor) if node.id < nbor.id else (nbor, node)
+            self.nodes_pairs.remove(pair)
+            for node_line in self.node_lines:
+                if node_line.pair == pair:
+                    self.node_lines.remove(node_line)  # Danger danger! List mutation within loop.
+                    break                              # But it's ok if this is the last iteration.
+
+            if node in nbor.nbors:
+                nbor.nbors.remove(node)
+                graph.prune(nbor)
+
     def deleteEdge(self, from_, to):
         from_.nbors.remove(to)
+        graph.prune(from_)
         to.nbors.remove(from_)
+        graph.prune(to)
         pair = (from_, to) if from_.id < to.id else (to, from_)
         self.nodes_pairs.remove(pair)
         for node_line in self.node_lines:
