@@ -87,6 +87,68 @@ class DrunkenBoy:
         return path
 
 
+class SoberBoy:
+    def __init__(self, graph):
+        self.graph = graph
+
+    class DataItem:
+        def __init__(self, parent, g, h):
+            self.parent = parent
+            self.g = g
+            self.h = h
+
+    def getPath(self, train):
+        if not train.end and train.destination is train.start:
+            return []
+        if train.end is train.destination:
+            return [train.end]
+        node_data = {train.end: self.DataItem(None, 0, 0)}
+        open_list = [train.end]
+        closed_list = []
+        current_node = train.end
+        last_node = train.start
+        while True:
+            for nbor in current_node.nbors:
+                if nbor is train.destination:
+                    path = [nbor]
+                    node = current_node
+                    while node is not train.end:
+                        path.append(node)
+                        node = node_data[node].parent
+                    return list(reversed(path))
+
+                if nbor is last_node or nbor in closed_list:
+                    continue
+
+                pair = (current_node, nbor) if current_node.id < nbor.id else (nbor, current_node)
+
+                if nbor in open_list:
+                    g = node_data[current_node].g + self.graph.nodes_pairs[pair].length
+                    if g < node_data[nbor].g:
+                        node_data[nbor].g = g
+                        node_data[nbor].parent = current_node
+                else:
+                    node_data[nbor] = self.DataItem(current_node,
+                                                    node_data[current_node].g + self.graph.nodes_pairs[pair].length,
+                                                    utils.getDistance((train.destination.x, train.destination.y),
+                                                                      (nbor.x, nbor.y)))
+                open_list.append(nbor)
+
+            open_list.remove(current_node)
+            closed_list.append(current_node)
+            last_node = current_node
+
+            if not open_list:
+                return []
+
+            scored_opens = []
+            for node in open_list:
+                data = node_data[node]
+                scored_opens.append((data.g + data.h, node))
+            scored_opens.sort(key=lambda x: x[0], reverse=True)
+            current_node = scored_opens.pop()[1]
+
+
 class Edge:
     def __init__(self, lnode, hnode):
         self.lnode, self.hnode = lnode, hnode
@@ -190,6 +252,7 @@ class Train(object):
     def __init__(self, edge, start, destination):
         self.edge = edge
         self.destination = destination
+        self.origin = start
         self.start = start
         self.end = start
         self.pos = 0.0
@@ -198,12 +261,14 @@ class Train(object):
         self.path = []
 
     def updateCoords(self, dt):
-        if self.start != self.end:
+        if self.start is not self.end:
             self.pos += (self.speed * dt) / self.edge.length
             if self.pos >= 1:
                 if not self.path:
-                    self.pos = 1
-                    self.speed = 0
+                    self.start = self.end = self.destination
+                    self.pos = 0
+                    self.destination, self.origin = self.origin, self.destination
+                    self.dirty = True
                 else:
                     self.start = self.end
                     self.end = self.path[0]
@@ -224,10 +289,16 @@ class Train(object):
         self.updateCoords(dt)
 
     def newPath(self, path):
-        self.end = path[0]
-        del path[0]
-        self.path = path
+        if path:
+            print self.start, self.end, self.path, path, self.origin, self.destination
+            if self.start is self.end:
+                self.end = path[0]
+                pair = (self.start, self.end) if self.start.id < self.end.id else (self.end, self.start)
+                self.edge = loop.graph.nodes_pairs[pair]
 
+            if self.end is path[0]:
+                del path[0]
+            self.path = path
 
 class MouseTool(object):
     id = "mouse"
@@ -265,15 +336,20 @@ class TrainTool(MouseTool):
     def reset(self):
         self.hover_node = None
         self.last_node = None
+        self.hover_path = None
+        self.invalid = True
 
     def click(self, x, y):
-        if self.hover_node and not self.last_node:
-            self.last_node = self.hover_node
-        elif self.hover_node:
-            to = self.last_node.nbors[0]
-            pair = (self.last_node, to) if self.last_node.id < to.id else (to, self.last_node)
-            train = Train(loop.graph.nodes_pairs[pair], self.last_node, self.hover_node)
-            loop.trains.append(train)
+        if not self.invalid:
+            if self.hover_node and not self.last_node:
+                self.last_node = self.hover_node
+            elif self.hover_node:
+                to = self.last_node.nbors[0]
+                pair = (self.last_node, to) if self.last_node.id < to.id else (to, self.last_node)
+                train = Train(loop.graph.nodes_pairs[pair], self.last_node, self.hover_node)
+                loop.trains.append(train)
+                self.last_node = None
+                self.hover_path = None
 
     def update(self, dt):
         self.updateHover()
@@ -281,6 +357,8 @@ class TrainTool(MouseTool):
     def updateHover(self):
         self.hover_pos = None
         self.hover_node = None
+        self.hover_path = None
+        self.invalid = False
         snap_node = None
         for node in loop.graph.nodes_list:
             if node.type is Signal.type:
@@ -294,15 +372,34 @@ class TrainTool(MouseTool):
 
         if snap_node:
             self.hover_node = snap_node[1]
+            if self.last_node:
+                self.hover_path = loop.pathfinder.getPath(Train(None, self.last_node, self.hover_node))
 
     def rightClick(self, x, y):
-        pass
+        if self.last_node:
+            self.last_node = None
 
     def draw(self):
-        if self.hover_node:
-            circle.x, circle.y = self.hover_node.x, self.hover_node.y
+        if self.last_node:
+            circle.x, circle.y = self.last_node.x, self.last_node.y
             circle.color = (0.5, 0.5, 1, 1)
             circle.render()
+
+        if self.hover_node:
+            circle.x, circle.y = self.hover_node.x, self.hover_node.y
+            if self.invalid:
+                circle.color = (1, 0, 0, 1)
+            else:
+                circle.color = (0.5, 0.5, 1, 1)
+            circle.render()
+
+        if self.hover_path:
+            last_node = self.last_node
+            for node in self.hover_path:
+                primitives.Line((last_node.x, last_node.y), (node.x, node.y), stroke=1,
+                                color=(0, 0, 1, 1)).render()
+                last_node = node
+
 
 class RouteTool(MouseTool):
     id = "route"
@@ -397,7 +494,6 @@ class SignalTool(MouseTool):
         self.hover_node = None
         self.hover_pos = (0, 0)
         self.invalid = True
-
 
     def click(self, x, y):
         if not self.invalid:
@@ -516,14 +612,14 @@ class Loop:
     def __init__(self):
         self.toolbox = Toolbox()
         self.graph = Graph()
-        self.pathfinder = DrunkenBoy(self.graph)
+        self.pathfinder = SoberBoy(self.graph)
         self.trains = []
 
     def draw(self):
         [line.render() for line in self.graph.node_lines]
         [node.draw() for node in self.graph.nodes_list]
-        [train.draw() for train in self.trains]
         self.toolbox.draw()
+        [train.draw() for train in self.trains]
 
     def update(self, dt):
         [train.update(dt) for train in self.trains]
