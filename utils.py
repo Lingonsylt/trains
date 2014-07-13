@@ -1,7 +1,9 @@
 import math
 
+
 def getDistance(from_, to):
     return math.sqrt(float((from_[0] - to[0]) ** 2 + float((from_[1] - to[1]) ** 2)))
+
 
 def getPointClosestToEdge(nodes_pairs, mouse_x, mouse_y):
     min_dist = None
@@ -28,6 +30,7 @@ def getPointClosestToEdge(nodes_pairs, mouse_x, mouse_y):
             min_dist = (distance, (from_, to), closest_point)
     return min_dist
 
+
 def getPointRelativeLine(start_point, relative_point, line_start, line_end):
     x, y = relative_point
     line_delta = tuple(x - y for x, y in zip(line_start, line_end))
@@ -41,3 +44,11 @@ def getPointAlongLine(from_, to, pos):
     from_x, from_y = from_
     to_x, to_y = to
     return from_x + (to_x - from_x) * pos, from_y + (to_y - from_y) * pos
+
+
+def getAngleLockedPosition(angles, x, y):
+    angle = math.atan2(x, y) + ((2 * math.pi) / angles) / 2
+    snap_angle = angle - angle % ((2 * math.pi) / angles)
+    snap_x, snap_y = math.sin(snap_angle), math.cos(snap_angle)
+    distance = (x * snap_x + y * snap_y) / float(snap_x ** 2 + snap_y ** 2)
+    return snap_x * distance, snap_y * distance

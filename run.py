@@ -5,7 +5,7 @@ import pyglet
 from pyglet.window import key, mouse
 import primitives
 
-TILE_SIZE = 10
+TILE_SIZE = 20
 mouse.x = 0
 mouse.y = 0
 circle = primitives.Circle(100, 100, stroke=1, width=10, color=(255, 255, 0, 1))
@@ -48,11 +48,11 @@ class Signal(Node):
 
     def draw(self):
         if self.nw is not None:
-            x, y = utils.getPointRelativeLine((self.x, self.y), (-5, -5),
-                                                                (self.nw_node.x, self.nw_node.y),
-                                                                (self.se_node.x, self.se_node.y))
-            tiny_circle.x = x * TILE_SIZE
-            tiny_circle.y = y * TILE_SIZE
+            sx, sy = utils.getPointRelativeLine((self.x * TILE_SIZE, self.y * TILE_SIZE), (-5, -5),
+                                                (self.nw_node.x, self.nw_node.y),
+                                                (self.se_node.x, self.se_node.y))
+            tiny_circle.x = sx
+            tiny_circle.y = sy
             if self.nw is True:
                 tiny_circle.color = (0, 255, 0, 1)
             else:
@@ -60,11 +60,11 @@ class Signal(Node):
             tiny_circle.render()
 
         if self.se is not None:
-            x, y = utils.getPointRelativeLine((self.x, self.y), (5, 5),
-                                                                (self.nw_node.x, self.nw_node.y),
-                                                                (self.se_node.x, self.se_node.y))
-            tiny_circle.x = x * TILE_SIZE
-            tiny_circle.y = y * TILE_SIZE
+            sx, sy = utils.getPointRelativeLine((self.x * TILE_SIZE, self.y * TILE_SIZE), (5, 5),
+                                                (self.nw_node.x, self.nw_node.y),
+                                                (self.se_node.x, self.se_node.y))
+            tiny_circle.x = sx
+            tiny_circle.y = sy
             if self.se is True:
                 tiny_circle.color = (0, 255, 0, 1)
             else:
@@ -310,8 +310,8 @@ class MouseTool(object):
     id = "mouse"
     name = "Mouse tool"
 
-    snap_distance = 5
-    signal_spacing = 5
+    snap_distance = 1
+    signal_spacing = 1
 
     def __init__(self):
         self.reset()
@@ -431,7 +431,7 @@ class RouteTool(MouseTool):
                     loop.graph.connectNodes(self.last_node, new_node)
                 self.last_node = new_node
             else:
-                new_node = loop.graph.createNode(int(x), int(y))  # TODO: Will bring chaos if mouse moved since last updateHover
+                new_node = loop.graph.createNode(*self.hover_pos)
                 if self.last_node:
                     loop.graph.connectNodes(self.last_node, new_node)
                 self.last_node = new_node
@@ -448,15 +448,22 @@ class RouteTool(MouseTool):
         self.hover_node = None
         self.hover_pos = None
 
+        if self.last_node:
+            locked_x, locked_y = utils.getAngleLockedPosition(8, mouse.x - self.last_node.x, mouse.y - self.last_node.y)
+            angle_x, angle_y = self.last_node.x + locked_x, self.last_node.y + locked_y
+            self.hover_pos = angle_x, angle_y
+        else:
+            angle_x, angle_y = mouse.x, mouse.y
+
         snap_node = None
         for node in loop.graph.nodes_list:
-            dist = utils.getDistance((mouse.x, mouse.y), (node.x, node.y))
+            dist = utils.getDistance((angle_x, angle_y), (node.x, node.y))
             if node.type is Signal.type and dist < self.signal_spacing:  # TODO: Signals should only
-                self.hover_pos = mouse.x, mouse.y                        # be invalid along edge
+                self.hover_pos = angle_x, angle_y                        # be invalid along edge
                 self.invalid = True
                 return
 
-            if dist < self.snap_distance:
+            if dist == 0:
                 if snap_node is None:
                     snap_node = (dist, node)
                 elif dist < snap_node[0]:
@@ -470,14 +477,14 @@ class RouteTool(MouseTool):
             else:
                 self.hover_node = snap_node[1]
         else:
-            snap_edge = utils.getPointClosestToEdge(loop.graph.nodes_pairs.keys(), mouse.x, mouse.y)
+            snap_edge = utils.getPointClosestToEdge(loop.graph.nodes_pairs.keys(), angle_x, angle_y)
             if snap_edge:
                 distance, edge, point = snap_edge
-                if distance < self.snap_distance:
-                    self.hover_pos = point
+                if distance == 0:
+                    self.hover_pos = angle_x, angle_y
                     self.hover_edge = edge
                     return
-            self.hover_pos = mouse.x, mouse.y
+            self.hover_pos = angle_x, angle_y
 
     def draw(self):
         circle.x, circle.y = self.hover_pos[0] * TILE_SIZE, self.hover_pos[1] * TILE_SIZE
@@ -654,16 +661,16 @@ def on_draw():
 @window.event
 def on_mouse_press(x, y, button, modifiers):
     if button == mouse.LEFT:
-        loop.toolbox.click(x / TILE_SIZE, y / TILE_SIZE)
+        loop.toolbox.click((x + TILE_SIZE / 2) / TILE_SIZE, (y + TILE_SIZE / 2) / TILE_SIZE)
     elif button == mouse.RIGHT:
-        loop.toolbox.rightClick(x / TILE_SIZE, y / TILE_SIZE)
+        loop.toolbox.rightClick((x + TILE_SIZE / 2) / TILE_SIZE, (y + TILE_SIZE / 2) / TILE_SIZE)
 
 @window.event
 def on_mouse_motion(x, y, dx, dy):
     mouse.sx = x
     mouse.sy = y
-    mouse.x = x / TILE_SIZE
-    mouse.y = y / TILE_SIZE
+    mouse.x = (x + TILE_SIZE / 2) / TILE_SIZE
+    mouse.y = (y + TILE_SIZE / 2) / TILE_SIZE
 
 @window.event
 def on_key_press(symbol, modifiers):
