@@ -5,6 +5,7 @@ import pyglet
 from pyglet.window import key, mouse
 import primitives
 
+TILE_SIZE = 10
 mouse.x = 0
 mouse.y = 0
 circle = primitives.Circle(100, 100, stroke=1, width=10, color=(255, 255, 0, 1))
@@ -19,7 +20,7 @@ class Node(object):
         self.nbors = []
 
     def draw(self):
-        circle.x, circle.y = self.x, self.y
+        circle.x, circle.y = self.x * TILE_SIZE, self.y * TILE_SIZE
         circle.color = (255, 255, 0, 1)
         circle.render()
 
@@ -47,9 +48,11 @@ class Signal(Node):
 
     def draw(self):
         if self.nw is not None:
-            tiny_circle.x, tiny_circle.y = utils.getPointRelativeLine((self.x, self.y), (-5, -5),
-                                                                      (self.nw_node.x, self.nw_node.y),
-                                                                      (self.se_node.x, self.se_node.y))
+            x, y = utils.getPointRelativeLine((self.x, self.y), (-5, -5),
+                                                                (self.nw_node.x, self.nw_node.y),
+                                                                (self.se_node.x, self.se_node.y))
+            tiny_circle.x = x * TILE_SIZE
+            tiny_circle.y = y * TILE_SIZE
             if self.nw is True:
                 tiny_circle.color = (0, 255, 0, 1)
             else:
@@ -57,9 +60,11 @@ class Signal(Node):
             tiny_circle.render()
 
         if self.se is not None:
-            tiny_circle.x, tiny_circle.y = utils.getPointRelativeLine((self.x, self.y), (5, 5),
-                                                                      (self.nw_node.x, self.nw_node.y),
-                                                                      (self.se_node.x, self.se_node.y))
+            x, y = utils.getPointRelativeLine((self.x, self.y), (5, 5),
+                                                                (self.nw_node.x, self.nw_node.y),
+                                                                (self.se_node.x, self.se_node.y))
+            tiny_circle.x = x * TILE_SIZE
+            tiny_circle.y = y * TILE_SIZE
             if self.se is True:
                 tiny_circle.color = (0, 255, 0, 1)
             else:
@@ -182,7 +187,8 @@ class Graph:
         pair = (from_, to) if from_.id < to.id else (to, from_)
         if not pair in self.nodes_pairs:
             self.nodes_pairs[pair] = Edge(*pair)
-            line = primitives.Line((from_.x, from_.y), (to.x, to.y), stroke=1, color=(255, 255, 0, 1))
+            line = primitives.Line((from_.x * TILE_SIZE, from_.y * TILE_SIZE),
+                                   (to.x * TILE_SIZE, to.y * TILE_SIZE), stroke=1, color=(255, 255, 0, 1))
             line.pair = pair
             self.node_lines.append(line)
 
@@ -247,7 +253,7 @@ class Graph:
 
 
 class Train(object):
-    speed = 300
+    speed = 30
 
     def __init__(self, edge, start, destination):
         self.edge = edge
@@ -281,7 +287,7 @@ class Train(object):
             self.x, self.y = utils.getPointAlongLine((self.start.x, self.start.y), (self.end.x, self.end.y), self.pos)
 
     def draw(self):
-        circle.x, circle.y = self.x, self.y
+        circle.x, circle.y = self.x * TILE_SIZE, self.y * TILE_SIZE
         circle.color = (1, 0, 0, 1)
         circle.render()
 
@@ -290,7 +296,6 @@ class Train(object):
 
     def newPath(self, path):
         if path:
-            print self.start, self.end, self.path, path, self.origin, self.destination
             if self.start is self.end:
                 self.end = path[0]
                 pair = (self.start, self.end) if self.start.id < self.end.id else (self.end, self.start)
@@ -300,12 +305,13 @@ class Train(object):
                 del path[0]
             self.path = path
 
+
 class MouseTool(object):
     id = "mouse"
     name = "Mouse tool"
 
-    snap_distance = 50
-    signal_spacing = 50
+    snap_distance = 5
+    signal_spacing = 5
 
     def __init__(self):
         self.reset()
@@ -381,12 +387,12 @@ class TrainTool(MouseTool):
 
     def draw(self):
         if self.last_node:
-            circle.x, circle.y = self.last_node.x, self.last_node.y
+            circle.x, circle.y = self.last_node.x * TILE_SIZE, self.last_node.y * TILE_SIZE
             circle.color = (0.5, 0.5, 1, 1)
             circle.render()
 
         if self.hover_node:
-            circle.x, circle.y = self.hover_node.x, self.hover_node.y
+            circle.x, circle.y = self.hover_node.x * TILE_SIZE, self.hover_node.y * TILE_SIZE
             if self.invalid:
                 circle.color = (1, 0, 0, 1)
             else:
@@ -396,7 +402,8 @@ class TrainTool(MouseTool):
         if self.hover_path:
             last_node = self.last_node
             for node in self.hover_path:
-                primitives.Line((last_node.x, last_node.y), (node.x, node.y), stroke=1,
+                primitives.Line((last_node.x * TILE_SIZE, last_node.y * TILE_SIZE),
+                                (node.x * TILE_SIZE, node.y * TILE_SIZE), stroke=1,
                                 color=(0, 0, 1, 1)).render()
                 last_node = node
 
@@ -473,7 +480,7 @@ class RouteTool(MouseTool):
             self.hover_pos = mouse.x, mouse.y
 
     def draw(self):
-        circle.x, circle.y = self.hover_pos
+        circle.x, circle.y = self.hover_pos[0] * TILE_SIZE, self.hover_pos[1] * TILE_SIZE
         if self.invalid:
             circle.color = (1, 0, 0, 1)
         else:
@@ -481,7 +488,8 @@ class RouteTool(MouseTool):
         circle.render()
 
         if self.last_node:
-            primitives.Line((self.last_node.x, self.last_node.y), self.hover_pos, stroke=1,
+            primitives.Line((self.last_node.x * TILE_SIZE, self.last_node.y * TILE_SIZE),
+                            (self.hover_pos[0] * TILE_SIZE, self.hover_pos[1] * TILE_SIZE), stroke=1,
                             color=(0.5, 0.5, 0, 1)).render()
 
 
@@ -540,7 +548,7 @@ class SignalTool(MouseTool):
 
     def draw(self):
         if self.hover_pos:
-            circle.x, circle.y = self.hover_pos
+            circle.x, circle.y = self.hover_pos[0] * TILE_SIZE, self.hover_pos[1] * TILE_SIZE
             if self.invalid:
                 circle.color = (1, 0, 0, 1)
             else:
@@ -550,13 +558,13 @@ class SignalTool(MouseTool):
 
 class Toolbox:
     keymap = {
-        key.R: RouteTool.id,
-        key.S: SignalTool.id,
-        key.T: TrainTool.id
+        key.Q: RouteTool.id,
+        key.W: SignalTool.id,
+        key.E: TrainTool.id
     }
 
     inv_keymap = {id: key for key, id in keymap.items()}
-    keynames = {key.R: "R", key.S: "S", key.T: "T"}
+    keynames = {key.Q: "Q", key.W: "W", key.E: "E"}
 
     def __init__(self):
         self.tools = {
@@ -646,14 +654,16 @@ def on_draw():
 @window.event
 def on_mouse_press(x, y, button, modifiers):
     if button == mouse.LEFT:
-        loop.toolbox.click(x, y)
+        loop.toolbox.click(x / TILE_SIZE, y / TILE_SIZE)
     elif button == mouse.RIGHT:
-        loop.toolbox.rightClick(x, y)
+        loop.toolbox.rightClick(x / TILE_SIZE, y / TILE_SIZE)
 
 @window.event
 def on_mouse_motion(x, y, dx, dy):
-    mouse.x = x
-    mouse.y = y
+    mouse.sx = x
+    mouse.sy = y
+    mouse.x = x / TILE_SIZE
+    mouse.y = y / TILE_SIZE
 
 @window.event
 def on_key_press(symbol, modifiers):
