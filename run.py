@@ -628,10 +628,8 @@ class RouteTool(MouseTool):
         snap_node = None
         for node in loop.graph.nodes:
             dist = utils.getDistance((angle_x, angle_y), (node.x, node.y))
-            if node.type is Signal.type and dist < self.signal_spacing:  # TODO: Signals should only
-                self.hover_pos = angle_x, angle_y                        # be invalid along edge
-                self.invalid = True
-                return
+            if node.type is Signal.type:
+                continue
 
             if dist == 0:
                 if snap_node is None:
@@ -657,7 +655,9 @@ class RouteTool(MouseTool):
                 if distance == 0:
                     self.hover_pos = angle_x, angle_y
                     self.hover_edge = n_edge
-                    if loop.graph.getEdge(*n_edge).isBusy():
+                    # If too close to a signal or edge is busy, it's invalid
+                    if any(utils.getDistance(point, (node.x, node.y)) < self.signal_spacing
+                           for node in n_edge if node.type is Signal.type) or loop.graph.getEdge(*n_edge).isBusy():
                         self.invalid = True
                     return
             self.hover_pos = angle_x, angle_y
@@ -684,7 +684,7 @@ class StationTool(MouseTool):
 
             # If snapped on edge: Create station on edge
             elif self.hover_edge:
-                loop.graph.insertNode(self.hover_pos, *self.hover_edge + (Station,))
+                loop.graph.insertNode(self.hover_pos, *self.hover_edge + (Station.type,))
 
             # If not snapped: Create station
             else:
@@ -706,11 +706,9 @@ class StationTool(MouseTool):
         # Snap to node
         snap_node = None
         for node in loop.graph.nodes:
+            if node.type is Signal.type:
+                continue
             dist = utils.getNodeDistance(mouse, node)
-            if node.type is Signal.type and dist < self.signal_spacing:  # TODO: Signals should only
-                self.hover_pos = mouse.x, mouse.y                        # be invalid along edge
-                self.invalid = True
-                return
 
             if dist == 0:
                 if snap_node is None:
@@ -731,9 +729,12 @@ class StationTool(MouseTool):
             if snap_edge:
                 distance, n_edge, point = snap_edge
                 if distance == 0:
-                    self.hover_pos = mouse.x, mouse.y
+                    self.hover_pos = point
                     self.hover_edge = n_edge
-                    if loop.graph.getEdge(*n_edge).isBusy():
+
+                    # If too close to a signal or edge is busy, it's invalid
+                    if any(utils.getDistance(point, (node.x, node.y)) < self.signal_spacing
+                           for node in n_edge if node.type is Signal.type) or loop.graph.getEdge(*n_edge).isBusy():
                         self.invalid = True
                     return
             self.hover_pos = mouse.x, mouse.y
@@ -827,13 +828,10 @@ class SignalTool(MouseTool):
         # Snap to node
         snap_node = None
         for node in loop.graph.nodes:
+            if not node.type is Signal.type:
+                continue
             dist = utils.getNodeDistance(mouse, node)
-            if not node.type is Signal.type and dist < self.signal_spacing:
-                self.hover_pos = mouse.x, mouse.y
-                self.invalid = True
-                return
-
-            if dist < self.signal_spacing:
+            if dist < self.snap_distance:
                 if snap_node is None:
                     snap_node = (dist, node)
                 elif dist < snap_node[0]:
@@ -850,7 +848,9 @@ class SignalTool(MouseTool):
                 if distance < self.snap_distance:
                     self.hover_edge = n_edge
                     self.hover_pos = point
-                    if loop.graph.getEdge(*n_edge).isBusy():
+                    # If too close to a signal or edge is busy, it's invalid
+                    if any(utils.getDistance(point, (node.x, node.y)) < self.signal_spacing
+                           for node in n_edge if node.type is Signal.type) or loop.graph.getEdge(*n_edge).isBusy():
                         self.invalid = True
                     return
 
