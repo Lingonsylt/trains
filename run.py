@@ -158,6 +158,16 @@ class Edge:
     def __init__(self, lnode, hnode):
         self.lnode, self.hnode = lnode, hnode
         self.length = utils.getDistance((lnode.x, lnode.y), (hnode.x, hnode.y))
+        self.busy = []
+        self.line = primitives.Line((lnode.x * TILE_SIZE, lnode.y * TILE_SIZE),
+                                    (hnode.x * TILE_SIZE, hnode.y * TILE_SIZE), stroke=1, color=(255, 255, 0, 1))
+
+    def draw(self):
+        if self.busy:
+            self.line.color = (1, 0.5, 0, 1)
+        else:
+            self.line.color = (1, 1, 0, 1)
+        self.line.render()
 
 
 class Graph:
@@ -165,7 +175,6 @@ class Graph:
         self.nodes = {}
         self.nodes_list = []
         self.nodes_pairs = {}
-        self.node_lines = []
         self.next_node_id = 0
         self.dirty = False
 
@@ -187,19 +196,11 @@ class Graph:
         pair = (from_, to) if from_.id < to.id else (to, from_)
         if not pair in self.nodes_pairs:
             self.nodes_pairs[pair] = Edge(*pair)
-            line = primitives.Line((from_.x * TILE_SIZE, from_.y * TILE_SIZE),
-                                   (to.x * TILE_SIZE, to.y * TILE_SIZE), stroke=1, color=(255, 255, 0, 1))
-            line.pair = pair
-            self.node_lines.append(line)
 
     def insertNode(self, point, from_, to, signal=False):
         self.dirty = True
         pair = (from_, to) if from_.id < to.id else (to, from_)
         del self.nodes_pairs[pair]
-        for node_line in self.node_lines:
-            if node_line.pair == pair:
-                self.node_lines.remove(node_line)  # Danger danger! List mutation within loop.
-                break                              # But it's ok if this is the last iteration.
         if to in from_.nbors:
             from_.nbors.remove(to)
         if from_ in to.nbors:
@@ -229,11 +230,6 @@ class Graph:
         for nbor in node.nbors:
             pair = (node, nbor) if node.id < nbor.id else (nbor, node)
             del self.nodes_pairs[pair]
-            for node_line in self.node_lines:
-                if node_line.pair == pair:
-                    self.node_lines.remove(node_line)  # Danger danger! List mutation within loop.
-                    break                              # But it's ok if this is the last iteration.
-
             if node in nbor.nbors:
                 nbor.nbors.remove(node)
                 loop.graph.prune(nbor)
@@ -246,17 +242,13 @@ class Graph:
         loop.graph.prune(to)
         pair = (from_, to) if from_.id < to.id else (to, from_)
         del self.nodes_pairs[pair]
-        for node_line in self.node_lines:
-            if node_line.pair == pair:
-                self.node_lines.remove(node_line)  # Danger danger! List mutation within loop.
-                break                              # But it's ok if this is the last iteration.
-
 
 class Wagon(object):
     size = 0.5
 
     def __init__(self):
         self.x = self.y = 0
+        self.edge = None
 
     def draw(self):
         circle.x, circle.y = self.x * TILE_SIZE, self.y * TILE_SIZE
@@ -297,31 +289,45 @@ class Train(object):
             self.pos += (self.speed * dt) / self.edge.length
             if self.pos >= 1:
                 if not self.path:
-                    self.start = self.end = self.destination
-                    self.pos = 0
-                    self.destination, self.origin = self.origin, self.destination
-                    self.trail = []
-                    self.trail_length = 0
-                    self.dirty = True
+                    if self.end is self.destination:
+                        self.start = self.end = self.destination
+                        self.pos = 0
+                        self.destination, self.origin = self.origin, self.destination
+                        self.trail = []
+                        self.trail_length = 0
+                        self.edge.busy.remove(self)
+                        self.dirty = True
+                    else:
+                        self.pos = 1
                 else:
-                    self.addToTrail(self.start)
+                    self.trail.append(self.start)
                     self.start = self.end
                     self.end = self.path[0]
                     del self.path[0]
                     pair = (self.start, self.end) if self.start.id < self.end.id else (self.end, self.start)
                     new_edge = loop.graph.nodes_pairs[pair]
                     self.pos = (self.pos * self.edge.length - self.edge.length) / new_edge.length
+                    self.edge.busy.remove(self)
                     self.edge = new_edge
+                    self.edge.busy.append(self)
 
             self.x, self.y = utils.getPointAlongLine((self.start.x, self.start.y), (self.end.x, self.end.y), self.pos)
 
         if self.start is not self.end:
             offset = 0
-            for wagon in self.wagons:
+            for i, wagon in enumerate(self.wagons):
                 offset += wagon.size
 
-                start, end, point = self.getPointAlongPath(list(reversed(self.trail)), self.end, self.start,
-                                                           1 - self.pos, offset)
+                edge, start, end, point = self.getPointAlongPath(list(reversed(self.trail)), self.end, self.start,
+                                                                 1 - self.pos, offset)
+                if wagon.edge != edge:
+                    if wagon.edge:
+                        wagon.edge.busy.remove(wagon)
+                        if self.trail and i == len(self.wagons) - 1:
+                            del self.trail[0]
+                    wagon.edge = edge
+                    edge.busy.append(wagon)
+
                 if point:
                     wagon.x, wagon.y = point
 
@@ -333,7 +339,7 @@ class Train(object):
         while True:
             if pos > 1:
                 if idx == len(path):
-                    return start, end, None
+                    return edge, start, end, None
                 new_edge = loop.graph.nodes_pairs[(end, path[idx]) if end.id < path[idx].id else (path[idx], end)]
                 pos = (pos * edge.length - edge.length) / new_edge.length
 
@@ -343,21 +349,7 @@ class Train(object):
                 idx += 1
 
             if pos <= 1:
-                return start, end, (utils.getPointAlongLine((start.x, start.y), (end.x, end.y), pos))
-
-    def addToTrail(self, node):
-        if not self.trail:
-            self.trail = [node]
-        else:
-
-            self.trail_length += loop.graph.nodes_pairs[(node, self.trail[-1]) if node.id < self.trail[-1].id else
-                                                        (self.trail[-1], node)].length
-            self.trail.append(node)
-            first_edge = loop.graph.nodes_pairs[(self.trail[0], self.trail[1]) if self.trail[0].id < self.trail[1].id else
-                                                (self.trail[1], self.trail[0])]
-            if self.trail_length - first_edge.length > self.total_length:
-                del self.trail[0]
-                self.trail_length -= first_edge.length
+                return edge, start, end, (utils.getPointAlongLine((start.x, start.y), (end.x, end.y), pos))
 
     def draw(self):
         circle.x, circle.y = self.x * TILE_SIZE, self.y * TILE_SIZE
@@ -374,10 +366,11 @@ class Train(object):
                 self.end = path[0]
                 pair = (self.start, self.end) if self.start.id < self.end.id else (self.end, self.start)
                 self.edge = loop.graph.nodes_pairs[pair]
+                self.edge.busy.append(self)
 
             if self.end is path[0]:
                 del path[0]
-            self.path = path
+        self.path = path
 
 
 class MouseTool(object):
@@ -557,6 +550,8 @@ class RouteTool(MouseTool):
                 if distance == 0:
                     self.hover_pos = angle_x, angle_y
                     self.hover_edge = edge
+                    if loop.graph.nodes_pairs[edge if edge[0].id < edge[1].id else (edge[1], edge[0])].busy:
+                        self.invalid = True
                     return
             self.hover_pos = angle_x, angle_y
 
@@ -705,7 +700,7 @@ class Loop:
         self.trains = []
 
     def draw(self):
-        [line.render() for line in self.graph.node_lines]
+        [edge.draw() for edge in self.graph.nodes_pairs.values()]
         [node.draw() for node in self.graph.nodes_list]
         self.toolbox.draw()
         [train.draw() for train in self.trains]
