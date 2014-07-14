@@ -51,4 +51,5 @@ def getAngleLockedPosition(angles, x, y):
     snap_angle = angle - angle % ((2 * math.pi) / angles)
     snap_x, snap_y = math.sin(snap_angle), math.cos(snap_angle)
     distance = (x * snap_x + y * snap_y) / float(snap_x ** 2 + snap_y ** 2)
-    return snap_x * distance, snap_y * distance
+    result_x, result_y = snap_x * distance, snap_y * distance
+    return int(result_x + (0.1 if result_x >= 0 else -0.1)), int(result_y + (0.1 if result_y >= 0 else -0.1))
