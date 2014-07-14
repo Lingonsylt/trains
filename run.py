@@ -1,4 +1,5 @@
 # encoding: utf-8
+from collections import defaultdict
 import random
 import utils
 import pyglet
@@ -23,7 +24,7 @@ class Trader(object):
     def update(self, dt):
         for connection in self.connections:
             for type, rate in self.produces.items():
-                connection.addResource(self, type, rate * dt / len(self.connections))
+                connection.supplyResource(self, type, rate * dt / len(self.connections))
 
     def draw(self):
         circle.x, circle.y = self.x * TILE_SIZE, self.y * TILE_SIZE
@@ -59,11 +60,7 @@ class Node(object):
         circle.render()
 
     def isBusy(self):
-        for nbor in self.nbors:
-            pair = (self, nbor) if self.id < nbor.id else (nbor, self)
-            if loop.graph.nodes_pairs[pair].isBusy():
-                return True
-        return False
+        return any(loop.graph.getEdge(self, nbor).isBusy() for nbor in self.nbors)
 
     def __repr__(self):
         return str(self.id)
@@ -74,7 +71,7 @@ class Station(Node):
 
     def __init__(self, id, x, y):
         super(Station, self).__init__(id, x, y)
-        self.resources = {}
+        self.resources = defaultdict(lambda: defaultdict(lambda: 0))
         self.connections = []
         self.reach = 5
 
@@ -95,9 +92,7 @@ class Station(Node):
                                       width=150)
         self.text.draw()
 
-    def addResource(self, source, type, amount):
-        self.resources.setdefault(source, {})
-        self.resources[source].setdefault(type, 0)
+    def supplyResource(self, source, type, amount):
         self.resources[source][type] += amount
 
     def loadResource(self, type, amount):
@@ -111,12 +106,10 @@ class Station(Node):
         return 0
 
     def unloadResource(self, type, amount):
-        self.addResource(None, type, amount)
+        self.supplyResource(None, type, amount)
 
     def acceptsResource(self, type):
-        for connection in self.connections:
-            if type in connection.consumes:
-                return True
+        return any(type in connection.consumes for connection in self.connections)
 
 
 class Signal(Node):
@@ -127,15 +120,19 @@ class Signal(Node):
         self.nw_node, self.se_node = nw, se
         self.nw = self.se = True
 
+    def __cmp__(self, other):
+        return 1 if (self.x, self.y) > (other.x, other.y) else -1
+
+    def __eq__(self, other):
+        return self is other
+
     def toggleDirection(self):
         if self.nw is not None and self.se is not None:
             self.se = None
         elif self.se is None:
-            self.se = True
-            self.nw = None
+            self.se, self.nw = True, None
         else:
-            self.nw = True
-            self.se = True
+            self.nw = self.se = True
 
     def draw(self):
         if self.nw is not None:
@@ -163,26 +160,6 @@ class Signal(Node):
             tiny_circle.render()
 
 
-class DrunkenBoy:
-    def __init__(self, graph):
-        self.graph = graph
-
-    def getPath(self, train):
-        return self._getPath(train, train.end, train.start, []) + [train.destination]
-
-    def _getPath(self, train, node, last_node, path):
-        random_nbors = node.nbors[:]
-        random.shuffle(random_nbors)
-        for nbor in random_nbors:
-            if nbor is last_node:
-                continue
-            if nbor is train.destination:
-                return path
-            path.append(nbor)
-            return self._getPath(train, nbor, node, path)
-        return path
-
-
 class SoberBoy:
     def __init__(self, graph):
         self.graph = graph
@@ -202,7 +179,7 @@ class SoberBoy:
         open_list = [train.end]
         closed_list = []
         current_node = train.end
-        last_node = train.start
+        last_node = train.start  # For one-way rule
         while True:
             for nbor in current_node.nbors:
                 if nbor is train.destination:
@@ -213,19 +190,18 @@ class SoberBoy:
                         node = node_data[node].parent
                     return list(reversed(path))
 
-                if nbor is last_node or nbor in closed_list:
+                if nbor is last_node or nbor in closed_list:  # Enforce one-way rule (nbor is last_node)
                     continue
 
-                pair = (current_node, nbor) if current_node.id < nbor.id else (nbor, current_node)
-
+                edge = self.graph.getEdge(current_node, nbor)
                 if nbor in open_list:
-                    g = node_data[current_node].g + self.graph.nodes_pairs[pair].length
+                    g = node_data[current_node].g + edge.length
                     if g < node_data[nbor].g:
                         node_data[nbor].g = g
                         node_data[nbor].parent = current_node
                 else:
                     node_data[nbor] = self.DataItem(current_node,
-                                                    node_data[current_node].g + self.graph.nodes_pairs[pair].length,
+                                                    node_data[current_node].g + edge.length,
                                                     utils.getDistance((train.destination.x, train.destination.y),
                                                                       (nbor.x, nbor.y)))
                 open_list.append(nbor)
@@ -237,44 +213,39 @@ class SoberBoy:
             if not open_list:
                 return []
 
-            scored_opens = []
-            for node in open_list:
-                data = node_data[node]
-                scored_opens.append((data.g + data.h, node))
-            scored_opens.sort(key=lambda x: x[0], reverse=True)
-            current_node = scored_opens.pop()[1]
+            current_node = sorted([(node_data[node].g + node_data[node].h, node) for node in open_list],
+                                  key=lambda x: x[0], reverse=True)[-1][1]
 
 
 class Edge:
     def __init__(self, lnode, hnode):
         self.lnode, self.hnode = lnode, hnode
-        self.length = utils.getDistance((lnode.x, lnode.y), (hnode.x, hnode.y))
+        self.length = utils.getNodeDistance(lnode, hnode)
         self.busy = []
-        self.line = primitives.Line((lnode.x * TILE_SIZE, lnode.y * TILE_SIZE),
-                                    (hnode.x * TILE_SIZE, hnode.y * TILE_SIZE), stroke=1, color=(255, 255, 0, 1))
 
     def draw(self):
+        line = primitives.Line((self.lnode.x * TILE_SIZE, self.lnode.y * TILE_SIZE),
+                               (self.hnode.x * TILE_SIZE, self.hnode.y * TILE_SIZE), stroke=1, color=(255, 255, 0, 1))
         if self.isBusy():
-            self.line.color = (1, 0.5, 0, 1)
+            line.color = (1, 0.5, 0, 1)
         else:
-            self.line.color = (1, 1, 0, 1)
-        self.line.render()
+            line.color = (1, 1, 0, 1)
+        line.render()
 
-    def isBusy(self):
+    def isBusy(self):  # Is there a train/wagon on this edge
         return bool(self.busy)
 
-    def isRouteBusy(self):
-        if self.busy: return True
+    def isRouteBusy(self):  # Is there a train/wagon on any edge connected by signals
+        if self.busy:
+            return True
         for last_node, node in ((self.lnode, self.hnode), (self.hnode, self.lnode)):
             if node.type is Signal.type:
                 while True:
                     remote_end = node.nw_node if node.nw_node is not last_node else node.se_node
-                    if loop.graph.nodes_pairs[(node, remote_end) if node.id < remote_end.id else
-                                              (remote_end, node)].isBusy():
+                    if loop.graph.getEdge(node, remote_end).isBusy():
                         return True
                     if remote_end.type is Signal.type:
-                        last_node = node
-                        node = remote_end
+                        last_node, node = node, remote_end
                     else:
                         break
         return False
@@ -282,23 +253,21 @@ class Edge:
 
 class Graph:
     def __init__(self):
-        self.nodes = {}
-        self.nodes_list = []
-        self.nodes_pairs = {}
+        self.nodes = []
+        self.edges = {}
         self.next_node_id = 0
         self.dirty = False
 
     def createNode(self, x, y, cls=None, args=None, kwargs=None):
         self.dirty = True
 
-        if cls is None:
-            cls = Node
-        if args is None: args = []
-        if kwargs is None: kwargs = {}
+        cls = Node if cls is None else cls
+        args = [] if args is None else args
+        kwargs = {} if kwargs is None else kwargs
+
         node = cls(self.next_node_id, x, y, *args, **kwargs)
         self.next_node_id += 1
-        self.nodes[node.id] = node
-        self.nodes_list.append(node)
+        self.nodes.append(node)
         if node.type is Station.type:
             loop.stations_created.append(node)
         return node
@@ -310,35 +279,36 @@ class Graph:
         self.dirty = True
         if to not in from_.nbors:
             from_.nbors.append(to)
+        if from_ not in to.nbors:
+            to.nbors.append(from_)
+
+        # Update signals nw/se_node
         if from_.type is Signal.type:
-            if (from_.x, from_.y) > (to.x, to.y):
+            if from_ > to:  # Uses __cmp__
                 from_.nw_node = to
             else:
                 from_.se_node = to
 
-        if from_ not in to.nbors:
-            to.nbors.append(from_)
-
         if to.type is Signal.type:
-            if (to.x, to.y) > (from_.x, from_.y):
+            if to > from_:  # Uses __cmp
                 to.nw_node = from_
             else:
                 to.se_node = from_
 
-        pair = (from_, to) if from_.id < to.id else (to, from_)
-        if not pair in self.nodes_pairs:
-            self.nodes_pairs[pair] = Edge(*pair)
+        n_edge = (from_, to) if from_.id < to.id else (to, from_)
+        if not n_edge in self.edges:
+            self.edges[n_edge] = Edge(*n_edge)
 
     def insertNode(self, point, from_, to, type=Node.type):
         self.dirty = True
         pair = (from_, to) if from_.id < to.id else (to, from_)
-        del self.nodes_pairs[pair]
+        del self.edges[pair]
         if to in from_.nbors:
             from_.nbors.remove(to)
         if from_ in to.nbors:
             to.nbors.remove(from_)
         if type is Signal.type:
-            cls = Signal, (from_, to) if (from_.x, from_.y) < (to.x, to.y) else (to, from_)
+            cls = Signal, (from_, to) if from_ < to else (to, from_)  # Uses __cmp__
         elif type is Station.type:
             cls = (Station,)
         else:
@@ -359,15 +329,14 @@ class Graph:
 
     def deleteNode(self, node):
         self.dirty = True
-        self.nodes_list.remove(node)
-        del self.nodes[node.id]
+        self.nodes.remove(node)
         if node.type is Signal.type:
             if len(node.nbors) == 2:
                 loop.graph.connectNodes(*node.nbors)
 
         for nbor in node.nbors:
             pair = (node, nbor) if node.id < nbor.id else (nbor, node)
-            del self.nodes_pairs[pair]
+            del self.edges[pair]
             if node in nbor.nbors:
                 nbor.nbors.remove(node)
                 loop.graph.prune(nbor)
@@ -381,7 +350,7 @@ class Graph:
         to.nbors.remove(from_)
         loop.graph.prune(to)
         pair = (from_, to) if from_.id < to.id else (to, from_)
-        del self.nodes_pairs[pair]
+        del self.edges[pair]
 
     def replaceNode(self, node, cls):
         new_node = self.createNode(node.x, node.y, cls)
@@ -389,6 +358,10 @@ class Graph:
         for nbor in node.nbors:
             self.connectNodes(new_node, nbor)
         self.deleteNode(node)
+
+    def getEdge(self, from_, to):
+        return self.edges[(from_, to) if from_.id < to.id else (to, from_)]
+
 
 class Wagon(object):
     size = 0.5
@@ -432,12 +405,14 @@ class Train(object):
         self.wagons.append(wagon)
 
     def updateCoords(self, dt):
-        if self.start is not self.end:
+        if self.start is not self.end:  # start == end means train is newly created with no orders
             self.pos += (self.speed * dt) / self.edge.length
+            # Move to new edge, or we're at our goal
             if self.pos >= 1:
                 if not self.path:
+                    # We have reached our goal. Transfer cargo or head to origin
                     if self.end is self.destination:
-                        if not self.transferCargo(dt, self.end):
+                        if not self.transferCargo(dt, self.end):  # Transfer cargo if available, then head to origin
                             self.start = self.end = self.destination
                             self.pos = 0
                             self.destination, self.origin = self.origin, self.destination
@@ -445,30 +420,36 @@ class Train(object):
                             self.edge.busy.remove(self)
                             self.dirty = True
                         else:
-                            self.pos = 1
+                            self.pos = 1  # Wait while transferring cargo
+                    # There is no path to our goal, stand still and wait until a path is found
                     else:
                         self.pos = 1
+                # Move to new edge
                 else:
-                    self.trail.append(self.start)
+                    if self.wagons:
+                        self.trail.append(self.start)
                     self.start = self.end
                     self.end = self.path[0]
                     del self.path[0]
-                    pair = (self.start, self.end) if self.start.id < self.end.id else (self.end, self.start)
-                    new_edge = loop.graph.nodes_pairs[pair]
+                    new_edge = loop.graph.getEdge(self.start, self.end)
                     self.pos = (self.pos * self.edge.length - self.edge.length) / new_edge.length
                     self.edge.busy.remove(self)
                     self.edge = new_edge
                     self.edge.busy.append(self)
 
-            self.x, self.y = utils.getPointAlongLine((self.start.x, self.start.y), (self.end.x, self.end.y), self.pos)
+            # Update the position of the train based on its pos on the edge
+            self.x, self.y = utils.getNodePointAlongLine(self.start, self.end, self.pos)
 
+        # Update wagon positions if moving
         if self.start is not self.end:
             offset = 0
             for i, wagon in enumerate(self.wagons):
                 offset += wagon.size
 
+                # Get a point on an edge in the trail at offset from the train pos
                 edge, start, end, point = self.getPointAlongPath(list(reversed(self.trail)), self.end, self.start,
                                                                  1 - self.pos, offset)
+                # Update busy state and clean trail if last wagon
                 if wagon.edge != edge:
                     if wagon.edge:
                         wagon.edge.busy.remove(wagon)
@@ -481,16 +462,16 @@ class Train(object):
                     wagon.x, wagon.y = point
 
     def transferCargo(self, dt, station):
-        working = False
+        working = False  # If loading/unloading, signal to chill at station
         for wagon in self.wagons:
-            if station.acceptsResource(wagon.type) and wagon.cargo > 0:
+            if station.acceptsResource(wagon.type) and wagon.cargo > 0:  # Unload cargo
                 amount = min(wagon.cargo, dt * wagon.loading_speed)
                 station.unloadResource(wagon.type, amount)
                 wagon.cargo -= amount
                 working = True
 
             space = wagon.capacity - wagon.cargo
-            if space > 0:
+            if space > 0:  # Load cargo
                 amount = station.loadResource(wagon.type, min(space, dt * wagon.loading_speed))
                 if amount:
                     wagon.cargo += amount
@@ -500,23 +481,21 @@ class Train(object):
 
     def getPointAlongPath(self, path, start, end, pos, distance):
         idx = 0
-        edge = loop.graph.nodes_pairs[(start, end) if start.id < end.id else (end, start)]
+        edge = loop.graph.getEdge(start, end)
         pos += distance / edge.length
 
         while True:
-            if pos > 1:
-                if idx == len(path):
+            if pos > 1:  # Continue to look at next edge
+                if idx == len(path):  # No point found, return the place where we got stuck
                     return edge, start, end, None
-                new_edge = loop.graph.nodes_pairs[(end, path[idx]) if end.id < path[idx].id else (path[idx], end)]
+                new_edge = loop.graph.getEdge(end, path[idx])
                 pos = (pos * edge.length - edge.length) / new_edge.length
 
-                edge = new_edge
-                start = end
-                end = path[idx]
+                edge, start, end = new_edge, end, path[idx]
                 idx += 1
 
-            if pos <= 1:
-                return edge, start, end, (utils.getPointAlongLine((start.x, start.y), (end.x, end.y), pos))
+            if pos <= 1:  # Point found, return
+                return edge, start, end, (utils.getNodePointAlongLine(start, end, pos))
 
     def draw(self):
         circle.x, circle.y = self.x * TILE_SIZE, self.y * TILE_SIZE
@@ -536,16 +515,14 @@ class Train(object):
                                           width=60)
             self.text.draw()
 
-
     def update(self, dt):
         self.updateCoords(dt)
 
     def newPath(self, path):
         if path:
-            if self.start is self.end:
+            if self.start is self.end:  # Newly created, has no direction/edge yet
                 self.end = path[0]
-                pair = (self.start, self.end) if self.start.id < self.end.id else (self.end, self.start)
-                self.edge = loop.graph.nodes_pairs[pair]
+                self.edge = loop.graph.getEdge(self.start, self.end)
                 self.edge.busy.append(self)
 
             if self.end is path[0]:
@@ -604,20 +581,23 @@ class TrainTool(MouseTool):
     def click(self, x, y):
         if not self.invalid:
             if self.active_train:
+                # Active train and a valid new destination: Set destination
                 if self.hover_node:
                     self.active_train.destination = self.hover_node
                     self.active_train.dirty = True
             else:
+                # Valid node but no last node: Set origin for new train
                 if self.hover_node and not self.last_node:
                     self.last_node = self.hover_node
+
+                # Valid origin and destination: Create new train
                 elif self.hover_node:
                     to = self.last_node.nbors[0]
-                    pair = (self.last_node, to) if self.last_node.id < to.id else (to, self.last_node)
-                    train = Train(loop.graph.nodes_pairs[pair], self.last_node, self.hover_node)
+                    train = Train(loop.graph.getEdge(self.last_node, to), self.last_node, self.hover_node)
                     loop.trains.append(train)
                     self.last_node = None
                     self.hover_path = None
-                    if -1 < loop.trains.index(train) < 9:
+                    if -1 < loop.trains.index(train) < 9:  # Activate new train in GUI if id <= 9
                         self.active_train_num = loop.trains.index(train) + 1
                         self.active_train = loop.trains[loop.trains.index(train)]
 
@@ -630,10 +610,10 @@ class TrainTool(MouseTool):
         self.hover_path = None
         self.invalid = False
         snap_node = None
-        for node in loop.graph.nodes_list:
-            if node.type is not Station.type:
+        for node in loop.graph.nodes:
+            if node.type is not Station.type:  # Snap only to stations
                 continue
-            dist = utils.getDistance((mouse.x, mouse.y), (node.x, node.y))
+            dist = utils.getNodeDistance(mouse, node)
             if dist < self.snap_distance:
                 if snap_node is None:
                     snap_node = (dist, node)
@@ -643,8 +623,9 @@ class TrainTool(MouseTool):
         if snap_node:
             self.hover_node = snap_node[1]
             if self.active_train:
-                self.last_node = self.active_train.origin
+                self.last_node = self.active_train.origin  # Set start of path to train if a train is active
             if self.last_node:
+                # Find a path between origin/train and destination
                 self.hover_path = loop.pathfinder.getPath(Train(None, self.last_node, self.hover_node))
 
     def rightClick(self, x, y):
@@ -686,6 +667,7 @@ class TrainTool(MouseTool):
         self.text.draw()
 
     def keyRelease(self, symbol, modifiers):
+        # 0: New train, 1-9: Activate existing train
         num = self.keymap.get(symbol)
         if num is not None:
             if num == 0:
@@ -712,15 +694,20 @@ class RouteTool(MouseTool):
     def click(self, x, y):
         if not self.invalid:
             if self.hover_node:
+                # Valid node and not back-tracking: Connect nodes
                 if self.last_node and self.last_node is not self.hover_node:
                     loop.graph.connectNodes(self.last_node, self.hover_node)
-                self.last_node = self.hover_node
+                self.last_node = self.hover_node  # There is a good reason for this :)
             elif self.hover_edge:
+                # Valid edge: Insert new node
                 new_node = loop.graph.insertNode(self.hover_pos, *self.hover_edge)
+
+                # Last node is not already on clicked edge: Connect new node to last node
                 if self.last_node and self.last_node not in self.hover_edge:
                     loop.graph.connectNodes(self.last_node, new_node)
                 self.last_node = new_node
             else:
+                # No snap: Create a new node, connecting to last node if present
                 new_node = loop.graph.createNode(*self.hover_pos)
                 if self.last_node:
                     loop.graph.connectNodes(self.last_node, new_node)
@@ -729,9 +716,10 @@ class RouteTool(MouseTool):
     def rightClick(self, x, y):
         if self.last_node:
             self.last_node = None
+
+        # Edge, and nothing on its route is busy: Delete it, pruning signal-only edges
         elif not self.invalid and not self.hover_node and self.hover_edge:
-            if not loop.graph.nodes_pairs[self.hover_edge if self.hover_edge[0].id < self.hover_edge[1].id else
-                                         (self.hover_edge[1], self.hover_edge[0])].isRouteBusy():
+            if not loop.graph.getEdge(*self.hover_edge).isRouteBusy():
                 loop.graph.deleteEdge(*self.hover_edge)
 
     def updateHover(self):
@@ -741,14 +729,16 @@ class RouteTool(MouseTool):
         self.hover_pos = None
 
         if self.last_node:
+            # Lock the hover position to an angle from last node
             locked_x, locked_y = utils.getAngleLockedPosition(8, mouse.x - self.last_node.x, mouse.y - self.last_node.y)
             angle_x, angle_y = self.last_node.x + locked_x, self.last_node.y + locked_y
             self.hover_pos = angle_x, angle_y
         else:
             angle_x, angle_y = mouse.x, mouse.y
 
+        # Snap to node
         snap_node = None
-        for node in loop.graph.nodes_list:
+        for node in loop.graph.nodes:
             dist = utils.getDistance((angle_x, angle_y), (node.x, node.y))
             if node.type is Signal.type and dist < self.signal_spacing:  # TODO: Signals should only
                 self.hover_pos = angle_x, angle_y                        # be invalid along edge
@@ -764,7 +754,7 @@ class RouteTool(MouseTool):
         if snap_node:
             self.hover_pos = snap_node[1].x, snap_node[1].y
             self.hover_edge = None
-            if self.last_node and snap_node in self.last_node.nbors:
+            if self.last_node and snap_node in self.last_node.nbors:  # No back-tracking
                 self.invalid = True
             else:
                 self.hover_node = snap_node[1]
@@ -772,13 +762,14 @@ class RouteTool(MouseTool):
                     self.invalid = True
                 return
         else:
-            snap_edge = utils.getPointClosestToEdge(loop.graph.nodes_pairs.keys(), angle_x, angle_y)
+            # Snap to edge
+            snap_edge = utils.getPointClosestToEdge(loop.graph.edges.keys(), angle_x, angle_y)
             if snap_edge:
-                distance, edge, point = snap_edge
+                distance, n_edge, point = snap_edge
                 if distance == 0:
                     self.hover_pos = angle_x, angle_y
-                    self.hover_edge = edge
-                    if loop.graph.nodes_pairs[edge if edge[0].id < edge[1].id else (edge[1], edge[0])].isBusy():
+                    self.hover_edge = n_edge
+                    if loop.graph.getEdge(*n_edge).isBusy():
                         self.invalid = True
                     return
             self.hover_pos = angle_x, angle_y
@@ -809,15 +800,21 @@ class StationTool(MouseTool):
 
     def click(self, x, y):
         if not self.invalid:
+            # If snapped on Node: Upgrade to Station
             if self.hover_node and self.hover_node.type is Node.type:
                 loop.graph.replaceNode(self.hover_node, Station)
+
+            # If snapped on edge: Create station on edge
             elif self.hover_edge:
                 loop.graph.insertNode(self.hover_pos, *self.hover_edge + (Station,))
+
+            # If not snapped: Create station
             else:
                 loop.graph.createNode(*self.hover_pos + (Station,))
 
     def rightClick(self, x, y):
         if not self.invalid:
+            # Delete station, or downgrade to Node if in the middle of route
             if self.hover_node and self.hover_node.type is Station.type:
                 if not loop.graph.prune(self.hover_node):
                     loop.graph.replaceNode(self.hover_node, Node)
@@ -828,9 +825,10 @@ class StationTool(MouseTool):
         self.hover_node = None
         self.hover_pos = None
 
+        # Snap to node
         snap_node = None
-        for node in loop.graph.nodes_list:
-            dist = utils.getDistance((mouse.x, mouse.y), (node.x, node.y))
+        for node in loop.graph.nodes:
+            dist = utils.getNodeDistance(mouse, node)
             if node.type is Signal.type and dist < self.signal_spacing:  # TODO: Signals should only
                 self.hover_pos = mouse.x, mouse.y                        # be invalid along edge
                 self.invalid = True
@@ -850,13 +848,14 @@ class StationTool(MouseTool):
                 self.invalid = True
                 return
         else:
-            snap_edge = utils.getPointClosestToEdge(loop.graph.nodes_pairs.keys(), mouse.x, mouse.y)
+            # Snap to edge
+            snap_edge = utils.getPointClosestToEdge(loop.graph.edges.keys(), mouse.x, mouse.y)
             if snap_edge:
-                distance, edge, point = snap_edge
+                distance, n_edge, point = snap_edge
                 if distance == 0:
                     self.hover_pos = mouse.x, mouse.y
-                    self.hover_edge = edge
-                    if loop.graph.nodes_pairs[edge if edge[0].id < edge[1].id else (edge[1], edge[0])].isBusy():
+                    self.hover_edge = n_edge
+                    if loop.graph.getEdge(*n_edge).isBusy():
                         self.invalid = True
                     return
             self.hover_pos = mouse.x, mouse.y
@@ -882,9 +881,9 @@ class TraderTool(MouseTool):
 
     def click(self, x, y):
         if not self.invalid:
-            if not self.hover_node:
+            if not self.hover_node:  # Not snapped: Create new producing trader
                 loop.createTrader(x, y, {0: 5}, [])
-            else:
+            else:  # Snapped: Toggle between producer and consumer
                 if self.hover_node.produces:
                     self.hover_node.produces = {}
                     self.hover_node.consumes = [0]
@@ -903,9 +902,10 @@ class TraderTool(MouseTool):
         self.hover_node = None
         self.hover_pos = None
 
+        # Snap to node
         snap_node = None
         for node in loop.traders:
-            dist = utils.getDistance((mouse.x, mouse.y), (node.x, node.y))
+            dist = utils.getNodeDistance(mouse, node)
 
             if dist == 0:
                 if snap_node is None:
@@ -941,9 +941,9 @@ class SignalTool(MouseTool):
 
     def click(self, x, y):
         if not self.invalid:
-            if self.hover_edge:
+            if self.hover_edge:  # Snapped to edge: Insert new signal
                 loop.graph.insertNode(self.hover_pos, *self.hover_edge, type=Signal.type)
-            elif self.hover_node:
+            elif self.hover_node:  # Snapped to node: Toggle signal direction
                 self.hover_node.toggleDirection()
 
     def rightClick(self, x, y):
@@ -956,9 +956,10 @@ class SignalTool(MouseTool):
         self.hover_node = None
         self.hover_pos = None
 
+        # Snap to node
         snap_node = None
-        for node in loop.graph.nodes_list:
-            dist = utils.getDistance((mouse.x, mouse.y), (node.x, node.y))
+        for node in loop.graph.nodes:
+            dist = utils.getNodeDistance(mouse, node)
             if not node.type is Signal.type and dist < self.signal_spacing:
                 self.hover_pos = mouse.x, mouse.y
                 self.invalid = True
@@ -974,13 +975,14 @@ class SignalTool(MouseTool):
             self.hover_node = snap_node[1]
             self.hover_pos = snap_node[1].x, snap_node[1].y
         else:
-            snap_edge = utils.getPointClosestToEdge(loop.graph.nodes_pairs.keys(), mouse.x, mouse.y)
+            # Snap to edge
+            snap_edge = utils.getPointClosestToEdge(loop.graph.edges.keys(), mouse.x, mouse.y)
             if snap_edge:
-                distance, edge, point = snap_edge
+                distance, n_edge, point = snap_edge
                 if distance < self.snap_distance:
-                    self.hover_edge = edge
+                    self.hover_edge = n_edge
                     self.hover_pos = point
-                    if loop.graph.nodes_pairs[edge if edge[0].id < edge[1].id else (edge[1], edge[0])].isBusy():
+                    if loop.graph.getEdge(*n_edge).isBusy():
                         self.invalid = True
                     return
 
@@ -1069,8 +1071,8 @@ class Loop:
 
     def draw(self):
         [trader.draw() for trader in self.traders]
-        [edge.draw() for edge in self.graph.nodes_pairs.values()]
-        [node.draw() for node in self.graph.nodes_list]
+        [edge.draw() for edge in self.graph.edges.values()]
+        [node.draw() for node in self.graph.nodes]
         self.toolbox.draw()
         [train.draw() for train in self.trains]
 
@@ -1102,14 +1104,18 @@ class Loop:
         trader.delete = True
 
     def updateConnections(self):
+        # Keep Trader.connections and Station.connections up to date
+
         if self.traders_dirty:
-            for trader in self.traders:
-                for station in self.graph.nodes_list:
-                    if station.type is not Station.type:
+            for trader in self.traders:  # TODO: Mark new traders to reduce footprint
+                for station in self.graph.nodes:
+                    if station.type is not Station.type:  # Only check Stations
                         continue
                     if trader.delete and trader in station.connections:
-                        station.connections.remove(trader)
-                    if not trader.delete and utils.getDistance((trader.x, trader.y), (station.x, station.y)) < station.reach:
+                        station.connections.remove(trader)  # Remove deleted trader from station.connections
+
+                    # Make sure nodes within reach are connected
+                    if not trader.delete and utils.getNodeDistance(trader, station) < station.reach:
                         if not trader in station.connections:
                             station.connections.append(trader)
                         if not station in trader.connections:
@@ -1122,7 +1128,7 @@ class Loop:
             if self.stations_created:
                 for station in self.stations_created:
                     for trader in self.traders:
-                        if utils.getDistance((trader.x, trader.y), (station.x, station.y)) < station.reach:
+                        if utils.getNodeDistance(trader, station) < station.reach:
                             trader.connections.append(station)
                             station.connections.append(trader)
                 self.stations_created = []
