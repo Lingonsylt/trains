@@ -243,6 +243,7 @@ class Graph:
         pair = (from_, to) if from_.id < to.id else (to, from_)
         del self.nodes_pairs[pair]
 
+
 class Wagon(object):
     size = 0.5
 
@@ -398,31 +399,49 @@ class MouseTool(object):
     def rightClick(self, x, y):
         pass
 
-    def draw(self):
+    def keyRelease(self, symbol, modifiers):
+        pass
+
+    def draw(self, gui_anchor):
         pass
 
 
 class TrainTool(MouseTool):
     id = "train"
     name = "Train"
+    keymap = {
+        key._0: 0, key._1: 1, key._2: 2, key._3: 3, key._4: 4, key._5: 5, key._6: 6, key._7: 7, key._8: 8, key._9: 9
+    }
 
     def reset(self):
         self.hover_node = None
         self.last_node = None
         self.hover_path = None
         self.invalid = True
+        self.active_train = None
+        self.active_train_num = 0
+        self.text = None
 
     def click(self, x, y):
         if not self.invalid:
-            if self.hover_node and not self.last_node:
-                self.last_node = self.hover_node
-            elif self.hover_node:
-                to = self.last_node.nbors[0]
-                pair = (self.last_node, to) if self.last_node.id < to.id else (to, self.last_node)
-                train = Train(loop.graph.nodes_pairs[pair], self.last_node, self.hover_node)
-                loop.trains.append(train)
-                self.last_node = None
-                self.hover_path = None
+            if self.active_train:
+                if self.hover_node:
+                    self.active_train.destination = self.hover_node
+                    self.active_train.dirty = True
+            else:
+                if self.hover_node and not self.last_node:
+                    self.last_node = self.hover_node
+                elif self.hover_node:
+                    to = self.last_node.nbors[0]
+                    pair = (self.last_node, to) if self.last_node.id < to.id else (to, self.last_node)
+                    train = Train(loop.graph.nodes_pairs[pair], self.last_node, self.hover_node)
+                    loop.trains.append(train)
+                    self.last_node = None
+                    self.hover_path = None
+                    if -1 < loop.trains.index(train) < 9:
+                        self.active_train_num = loop.trains.index(train) + 1
+                        self.active_train = loop.trains[loop.trains.index(train)]
+                        self.last_node = None
 
     def update(self, dt):
         self.updateHover()
@@ -445,6 +464,8 @@ class TrainTool(MouseTool):
 
         if snap_node:
             self.hover_node = snap_node[1]
+            if self.active_train:
+                self.last_node = self.active_train.origin
             if self.last_node:
                 self.hover_path = loop.pathfinder.getPath(Train(None, self.last_node, self.hover_node))
 
@@ -452,7 +473,7 @@ class TrainTool(MouseTool):
         if self.last_node:
             self.last_node = None
 
-    def draw(self):
+    def draw(self, gui_anchor):
         if self.last_node:
             circle.x, circle.y = self.last_node.x * TILE_SIZE, self.last_node.y * TILE_SIZE
             circle.color = (0.5, 0.5, 1, 1)
@@ -473,6 +494,30 @@ class TrainTool(MouseTool):
                                 (node.x * TILE_SIZE, node.y * TILE_SIZE), stroke=1,
                                 color=(0, 0, 1, 1)).render()
                 last_node = node
+
+        text = "\n".join(["%s New train (0)" % ("*" if self.active_train_num == 0 else " ")] +
+                         ["%s Train %s (%s)" % ("*" if self.active_train_num == n else " ", n, n)
+                          for n in range(1, len(loop.trains[:9]) + 1)])
+        text_x, text_y = gui_anchor
+        self.text = pyglet.text.Label(text,
+                                      font_name='Courier',
+                                      font_size=12,
+                                      x=text_x, y=text_y,
+                                      anchor_x='left', anchor_y='top', multiline=True,
+                                      width=window.width)
+        self.text.draw()
+
+    def keyRelease(self, symbol, modifiers):
+        num = self.keymap.get(symbol)
+        if num is not None:
+            if num == 0:
+                self.reset()
+                self.active_train = None
+                self.active_train_num = 0
+            elif num <= len(loop.trains):
+                self.reset()
+                self.active_train = loop.trains[num - 1]
+                self.active_train_num = num
 
 
 class RouteTool(MouseTool):
@@ -555,7 +600,7 @@ class RouteTool(MouseTool):
                     return
             self.hover_pos = angle_x, angle_y
 
-    def draw(self):
+    def draw(self, gui_anchor):
         circle.x, circle.y = self.hover_pos[0] * TILE_SIZE, self.hover_pos[1] * TILE_SIZE
         if self.invalid:
             circle.color = (1, 0, 0, 1)
@@ -622,7 +667,7 @@ class SignalTool(MouseTool):
                     self.hover_pos = point
                     return
 
-    def draw(self):
+    def draw(self, gui_anchor):
         if self.hover_pos:
             circle.x, circle.y = self.hover_pos[0] * TILE_SIZE, self.hover_pos[1] * TILE_SIZE
             if self.invalid:
@@ -673,7 +718,7 @@ class Toolbox:
 
     def draw(self):
         self.text.draw()
-        self.active_tool.draw()
+        self.active_tool.draw((self.text.x + 20, self.text.y - self.text.content_height - 10))
 
     def click(self, x, y):
         self.active_tool.click(x, y)
@@ -684,6 +729,8 @@ class Toolbox:
     def keyRelease(self, symbol, modifiers):
         if symbol in self.keymap:
             self.activateTool(self.keymap[symbol])
+        else:
+            self.active_tool.keyRelease(symbol, modifiers)
 
 try:
     config = pyglet.gl.Config(sample_buffers=1, samples=4, depth_size=16, double_buffer=True)
