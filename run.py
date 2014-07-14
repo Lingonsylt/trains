@@ -24,8 +24,27 @@ class Node(object):
         circle.color = (255, 255, 0, 1)
         circle.render()
 
+    def isBusy(self):
+        for nbor in self.nbors:
+            pair = (self, nbor) if self.id < nbor.id else (nbor, self)
+            if loop.graph.nodes_pairs[pair].busy:
+                return True
+        return False
+
     def __repr__(self):
         return str(self.id)
+
+
+class Station(Node):
+    type = object()
+
+    def __init__(self, id, x, y):
+        super(Station, self).__init__(id, x, y)
+
+    def draw(self):
+        circle.x, circle.y = self.x * TILE_SIZE, self.y * TILE_SIZE
+        circle.color = (0, 1, 0, 1)
+        circle.render()
 
 
 class Signal(Node):
@@ -178,9 +197,14 @@ class Graph:
         self.next_node_id = 0
         self.dirty = False
 
-    def createNode(self, x, y, signal=None):
+    def createNode(self, x, y, cls=None, args=None, kwargs=None):
         self.dirty = True
-        node = Node(self.next_node_id, x, y) if not signal else Signal(self.next_node_id, x, y, *signal)
+
+        if cls is None:
+            cls = Node
+        if args is None: args = []
+        if kwargs is None: kwargs = {}
+        node = cls(self.next_node_id, x, y, *args, **kwargs)
         self.next_node_id += 1
         self.nodes[node.id] = node
         self.nodes_list.append(node)
@@ -197,7 +221,7 @@ class Graph:
         if not pair in self.nodes_pairs:
             self.nodes_pairs[pair] = Edge(*pair)
 
-    def insertNode(self, point, from_, to, signal=False):
+    def insertNode(self, point, from_, to, type=Node.type):
         self.dirty = True
         pair = (from_, to) if from_.id < to.id else (to, from_)
         del self.nodes_pairs[pair]
@@ -205,9 +229,13 @@ class Graph:
             from_.nbors.remove(to)
         if from_ in to.nbors:
             to.nbors.remove(from_)
-        if signal:
-            signal = (from_, to) if (from_.x, from_.y) < (to.x, to.y) else (to, from_)
-        new_node = self.createNode(point[0], point[1], signal)
+        if type is Signal.type:
+            cls = Signal, (from_, to) if (from_.x, from_.y) < (to.x, to.y) else (to, from_)
+        elif type is Station.type:
+            cls = (Station,)
+        else:
+            cls = ()
+        new_node = self.createNode(point[0], point[1], *cls)
         self.connectNodes(from_, new_node)
         self.connectNodes(new_node, to)
         return new_node
@@ -216,8 +244,10 @@ class Graph:
         if node.type is Signal.type:
             if len(node.nbors) == 1:
                 loop.graph.deleteNode(node)
+                return True
         elif not node.nbors:
             loop.graph.deleteNode(node)
+            return True
 
     def deleteNode(self, node):
         self.dirty = True
@@ -243,6 +273,12 @@ class Graph:
         pair = (from_, to) if from_.id < to.id else (to, from_)
         del self.nodes_pairs[pair]
 
+    def replaceNode(self, node, cls):
+        new_node = self.createNode(node.x, node.y, cls)
+        new_node.nbors = node.nbors[:]
+        for nbor in node.nbors:
+            self.connectNodes(new_node, nbor)
+        self.deleteNode(node)
 
 class Wagon(object):
     size = 0.5
@@ -441,7 +477,6 @@ class TrainTool(MouseTool):
                     if -1 < loop.trains.index(train) < 9:
                         self.active_train_num = loop.trains.index(train) + 1
                         self.active_train = loop.trains[loop.trains.index(train)]
-                        self.last_node = None
 
     def update(self, dt):
         self.updateHover()
@@ -453,7 +488,7 @@ class TrainTool(MouseTool):
         self.invalid = False
         snap_node = None
         for node in loop.graph.nodes_list:
-            if node.type is Signal.type:
+            if node.type is not Station.type:
                 continue
             dist = utils.getDistance((mouse.x, mouse.y), (node.x, node.y))
             if dist < self.snap_distance:
@@ -588,6 +623,9 @@ class RouteTool(MouseTool):
                 self.invalid = True
             else:
                 self.hover_node = snap_node[1]
+                if self.hover_node.isBusy():
+                    self.invalid = True
+                return
         else:
             snap_edge = utils.getPointClosestToEdge(loop.graph.nodes_pairs.keys(), angle_x, angle_y)
             if snap_edge:
@@ -612,6 +650,79 @@ class RouteTool(MouseTool):
             primitives.Line((self.last_node.x * TILE_SIZE, self.last_node.y * TILE_SIZE),
                             (self.hover_pos[0] * TILE_SIZE, self.hover_pos[1] * TILE_SIZE), stroke=1,
                             color=(0.5, 0.5, 0, 1)).render()
+
+
+class StationTool(MouseTool):
+    id = "station"
+    name = "Station"
+
+    def reset(self):
+        self.hover_pos = (0, 0)
+        self.hover_edge = None
+        self.hover_node = None
+        self.invalid = True
+
+    def click(self, x, y):
+        if not self.invalid:
+            if self.hover_node and self.hover_node.type is Node.type:
+                loop.graph.replaceNode(self.hover_node, Station)
+            elif self.hover_edge:
+                loop.graph.insertNode(self.hover_pos, *self.hover_edge + (Station,))
+            else:
+                loop.graph.createNode(*self.hover_pos + (Station,))
+
+    def rightClick(self, x, y):
+        if not self.invalid:
+            if self.hover_node and self.hover_node.type is Station.type:
+                if not loop.graph.prune(self.hover_node):
+                    loop.graph.replaceNode(self.hover_node, Node)
+
+    def updateHover(self):
+        self.invalid = False
+        self.hover_edge = None
+        self.hover_node = None
+        self.hover_pos = None
+
+        snap_node = None
+        for node in loop.graph.nodes_list:
+            dist = utils.getDistance((mouse.x, mouse.y), (node.x, node.y))
+            if node.type is Signal.type and dist < self.signal_spacing:  # TODO: Signals should only
+                self.hover_pos = mouse.x, mouse.y                        # be invalid along edge
+                self.invalid = True
+                return
+
+            if dist == 0:
+                if snap_node is None:
+                    snap_node = (dist, node)
+                elif dist < snap_node[0]:
+                    snap_node = (dist, node)
+
+        if snap_node:
+            self.hover_pos = snap_node[1].x, snap_node[1].y
+            self.hover_edge = None
+            self.hover_node = snap_node[1]
+            if self.hover_node.isBusy():
+                self.invalid = True
+                return
+        else:
+            snap_edge = utils.getPointClosestToEdge(loop.graph.nodes_pairs.keys(), mouse.x, mouse.y)
+            if snap_edge:
+                distance, edge, point = snap_edge
+                if distance == 0:
+                    self.hover_pos = mouse.x, mouse.y
+                    self.hover_edge = edge
+                    if loop.graph.nodes_pairs[edge if edge[0].id < edge[1].id else (edge[1], edge[0])].busy:
+                        self.invalid = True
+                    return
+            self.hover_pos = mouse.x, mouse.y
+
+    def draw(self, gui_anchor):
+        circle.x, circle.y = self.hover_pos[0] * TILE_SIZE, self.hover_pos[1] * TILE_SIZE
+        if self.invalid:
+            circle.color = (1, 0, 0, 1)
+        else:
+            circle.color = (0.5, 0.5, 1, 1)
+        circle.render()
 
 
 class SignalTool(MouseTool):
@@ -665,6 +776,8 @@ class SignalTool(MouseTool):
                 if distance < self.snap_distance:
                     self.hover_edge = edge
                     self.hover_pos = point
+                    if loop.graph.nodes_pairs[edge if edge[0].id < edge[1].id else (edge[1], edge[0])].busy:
+                        self.invalid = True
                     return
 
     def draw(self, gui_anchor):
@@ -681,18 +794,16 @@ class Toolbox:
     keymap = {
         key.Q: RouteTool.id,
         key.W: SignalTool.id,
-        key.E: TrainTool.id
+        key.E: TrainTool.id,
+        key.R: StationTool.id,
     }
 
     inv_keymap = {id: key for key, id in keymap.items()}
-    keynames = {key.Q: "Q", key.W: "W", key.E: "E"}
+    keynames = {key.Q: "Q", key.W: "W", key.E: "E", key.R: "R"}
 
     def __init__(self):
-        self.tools = {
-            RouteTool.id: RouteTool(),
-            SignalTool.id: SignalTool(),
-            TrainTool.id: TrainTool()
-        }
+        self.ordered_tools = [RouteTool(), SignalTool(), TrainTool(), StationTool()]
+        self.tools = {tool.id: tool for tool in self.ordered_tools}
         self.active_tool = None
         self.text = None
         self.activateTool(RouteTool.id)
@@ -704,7 +815,7 @@ class Toolbox:
                           ("*" if tool.id == id else " ",
                            tool.name,
                            self.keynames[self.inv_keymap[tool.id]])
-                          for tool in sorted(self.tools.values())])
+                          for tool in self.ordered_tools])
 
         self.text = pyglet.text.Label(text,
                                       font_name='Courier',
