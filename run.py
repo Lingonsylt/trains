@@ -252,8 +252,21 @@ class Graph:
                 break                              # But it's ok if this is the last iteration.
 
 
+class Wagon(object):
+    size = 0.5
+
+    def __init__(self):
+        self.x = self.y = 0
+
+    def draw(self):
+        circle.x, circle.y = self.x * TILE_SIZE, self.y * TILE_SIZE
+        circle.color = (0.8, 1, 0, 1)
+        circle.render()
+
+
 class Train(object):
-    speed = 30
+    speed = 20
+    size = 0.5
 
     def __init__(self, edge, start, destination):
         self.edge = edge
@@ -265,6 +278,19 @@ class Train(object):
         self.x, self.y = self.start.x, self.start.y
         self.dirty = True
         self.path = []
+        self.wagons = []
+        self.trail = []
+        self.trail_length = 0
+        self.total_length = self.size
+        self.addWagon(Wagon())
+        self.addWagon(Wagon())
+        self.addWagon(Wagon())
+        self.addWagon(Wagon())
+        self.addWagon(Wagon())
+
+    def addWagon(self, wagon):
+        self.total_length += wagon.size
+        self.wagons.append(wagon)
 
     def updateCoords(self, dt):
         if self.start is not self.end:
@@ -274,8 +300,11 @@ class Train(object):
                     self.start = self.end = self.destination
                     self.pos = 0
                     self.destination, self.origin = self.origin, self.destination
+                    self.trail = []
+                    self.trail_length = 0
                     self.dirty = True
                 else:
+                    self.addToTrail(self.start)
                     self.start = self.end
                     self.end = self.path[0]
                     del self.path[0]
@@ -286,10 +315,55 @@ class Train(object):
 
             self.x, self.y = utils.getPointAlongLine((self.start.x, self.start.y), (self.end.x, self.end.y), self.pos)
 
+        if self.start is not self.end:
+            offset = 0
+            for wagon in self.wagons:
+                offset += wagon.size
+
+                start, end, point = self.getPointAlongPath(list(reversed(self.trail)), self.end, self.start,
+                                                           1 - self.pos, offset)
+                if point:
+                    wagon.x, wagon.y = point
+
+    def getPointAlongPath(self, path, start, end, pos, distance):
+        idx = 0
+        edge = loop.graph.nodes_pairs[(start, end) if start.id < end.id else (end, start)]
+        pos += distance / edge.length
+
+        while True:
+            if pos > 1:
+                if idx == len(path):
+                    return start, end, None
+                new_edge = loop.graph.nodes_pairs[(end, path[idx]) if end.id < path[idx].id else (path[idx], end)]
+                pos = (pos * edge.length - edge.length) / new_edge.length
+
+                edge = new_edge
+                start = end
+                end = path[idx]
+                idx += 1
+
+            if pos <= 1:
+                return start, end, (utils.getPointAlongLine((start.x, start.y), (end.x, end.y), pos))
+
+    def addToTrail(self, node):
+        if not self.trail:
+            self.trail = [node]
+        else:
+
+            self.trail_length += loop.graph.nodes_pairs[(node, self.trail[-1]) if node.id < self.trail[-1].id else
+                                                        (self.trail[-1], node)].length
+            self.trail.append(node)
+            first_edge = loop.graph.nodes_pairs[(self.trail[0], self.trail[1]) if self.trail[0].id < self.trail[1].id else
+                                                (self.trail[1], self.trail[0])]
+            if self.trail_length - first_edge.length > self.total_length:
+                del self.trail[0]
+                self.trail_length -= first_edge.length
+
     def draw(self):
         circle.x, circle.y = self.x * TILE_SIZE, self.y * TILE_SIZE
         circle.color = (1, 0, 0, 1)
         circle.render()
+        [wagon.draw() for wagon in self.wagons]
 
     def update(self, dt):
         self.updateCoords(dt)
