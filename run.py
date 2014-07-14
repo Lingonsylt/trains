@@ -24,7 +24,6 @@ class Trader(object):
         for connection in self.connections:
             for type, rate in self.produces.items():
                 connection.addResource(self, type, rate * dt / len(self.connections))
-        print self.connections
 
     def draw(self):
         circle.x, circle.y = self.x * TILE_SIZE, self.y * TILE_SIZE
@@ -61,7 +60,7 @@ class Node(object):
     def isBusy(self):
         for nbor in self.nbors:
             pair = (self, nbor) if self.id < nbor.id else (nbor, self)
-            if loop.graph.nodes_pairs[pair].busy:
+            if loop.graph.nodes_pairs[pair].isBusy():
                 return True
         return False
 
@@ -236,11 +235,30 @@ class Edge:
                                     (hnode.x * TILE_SIZE, hnode.y * TILE_SIZE), stroke=1, color=(255, 255, 0, 1))
 
     def draw(self):
-        if self.busy:
+        if self.isBusy():
             self.line.color = (1, 0.5, 0, 1)
         else:
             self.line.color = (1, 1, 0, 1)
         self.line.render()
+
+    def isBusy(self):
+        return bool(self.busy)
+
+    def isRouteBusy(self):
+        if self.busy: return True
+        for last_node, node in ((self.lnode, self.hnode), (self.hnode, self.lnode)):
+            if node.type is Signal.type:
+                while True:
+                    remote_end = node.nw_node if node.nw_node is not last_node else node.se_node
+                    if loop.graph.nodes_pairs[(node, remote_end) if node.id < remote_end.id else
+                                              (remote_end, node)].isBusy():
+                        return True
+                    if remote_end.type is Signal.type:
+                        last_node = node
+                        node = remote_end
+                    else:
+                        break
+        return False
 
 
 class Graph:
@@ -271,8 +289,23 @@ class Graph:
             raise Exception("Cannot connect to self!")
 
         self.dirty = True
-        from_.nbors.append(to)
-        to.nbors.append(from_)
+        if to not in from_.nbors:
+            from_.nbors.append(to)
+        if from_.type is Signal.type:
+            if (from_.x, from_.y) > (to.x, to.y):
+                from_.nw_node = to
+            else:
+                from_.se_node = to
+
+        if from_ not in to.nbors:
+            to.nbors.append(from_)
+
+        if to.type is Signal.type:
+            if (to.x, to.y) > (from_.x, from_.y):
+                to.nw_node = from_
+            else:
+                to.se_node = from_
+
         pair = (from_, to) if from_.id < to.id else (to, from_)
         if not pair in self.nodes_pairs:
             self.nodes_pairs[pair] = Edge(*pair)
@@ -367,8 +400,6 @@ class Train(object):
         self.path = []
         self.wagons = []
         self.trail = []
-        self.trail_length = 0
-        self.total_length = self.size
         self.addWagon(Wagon())
         self.addWagon(Wagon())
         self.addWagon(Wagon())
@@ -376,7 +407,6 @@ class Train(object):
         self.addWagon(Wagon())
 
     def addWagon(self, wagon):
-        self.total_length += wagon.size
         self.wagons.append(wagon)
 
     def updateCoords(self, dt):
@@ -389,7 +419,6 @@ class Train(object):
                         self.pos = 0
                         self.destination, self.origin = self.origin, self.destination
                         self.trail = []
-                        self.trail_length = 0
                         self.edge.busy.remove(self)
                         self.dirty = True
                     else:
@@ -645,7 +674,9 @@ class RouteTool(MouseTool):
         if self.last_node:
             self.last_node = None
         elif not self.invalid and not self.hover_node and self.hover_edge:
-            loop.graph.deleteEdge(*self.hover_edge)
+            if not loop.graph.nodes_pairs[self.hover_edge if self.hover_edge[0].id < self.hover_edge[1].id else
+                                         (self.hover_edge[1], self.hover_edge[0])].isRouteBusy():
+                loop.graph.deleteEdge(*self.hover_edge)
 
     def updateHover(self):
         self.invalid = False
@@ -691,7 +722,7 @@ class RouteTool(MouseTool):
                 if distance == 0:
                     self.hover_pos = angle_x, angle_y
                     self.hover_edge = edge
-                    if loop.graph.nodes_pairs[edge if edge[0].id < edge[1].id else (edge[1], edge[0])].busy:
+                    if loop.graph.nodes_pairs[edge if edge[0].id < edge[1].id else (edge[1], edge[0])].isBusy():
                         self.invalid = True
                     return
             self.hover_pos = angle_x, angle_y
@@ -769,7 +800,7 @@ class StationTool(MouseTool):
                 if distance == 0:
                     self.hover_pos = mouse.x, mouse.y
                     self.hover_edge = edge
-                    if loop.graph.nodes_pairs[edge if edge[0].id < edge[1].id else (edge[1], edge[0])].busy:
+                    if loop.graph.nodes_pairs[edge if edge[0].id < edge[1].id else (edge[1], edge[0])].isBusy():
                         self.invalid = True
                     return
             self.hover_pos = mouse.x, mouse.y
@@ -853,7 +884,7 @@ class SignalTool(MouseTool):
                 self.hover_node.toggleDirection()
 
     def rightClick(self, x, y):
-        if self.hover_node:
+        if self.hover_node and not self.hover_node.isBusy():
             loop.graph.deleteNode(self.hover_node)
 
     def updateHover(self):
@@ -886,7 +917,7 @@ class SignalTool(MouseTool):
                 if distance < self.snap_distance:
                     self.hover_edge = edge
                     self.hover_pos = point
-                    if loop.graph.nodes_pairs[edge if edge[0].id < edge[1].id else (edge[1], edge[0])].busy:
+                    if loop.graph.nodes_pairs[edge if edge[0].id < edge[1].id else (edge[1], edge[0])].isBusy():
                         self.invalid = True
                     return
 
