@@ -34,7 +34,8 @@ class Trader(object):
         if self.produces:
             text += "Prod: " + ", ".join(["%s (%s)" % (resource_types[type], amount) for type, amount in self.produces.items()])
         if self.consumes:
-            text += "\nCons: " + ", ".join(["%s (%s)" % item for item in self.consumes])
+            if self.produces: text += "\n"
+            text += "Cons: " + ", ".join(["%s" % resource_types[item] for item in self.consumes])
         if text:
             self.text = pyglet.text.Label(text,
                                           font_name='Courier',
@@ -82,7 +83,7 @@ class Station(Node):
         circle.color = (0, 1, 0, 1)
         circle.render()
 
-        text = "\n".join(["%s->%s" % (source.id,
+        text = "\n".join(["%s->%s" % (source.id if source else "#",
                                       ", ".join(["%s %s" % (resource_types[type], int(amount))
                                                  for type, amount in resources.items()]))
                           for source, resources in self.resources.items()])
@@ -98,6 +99,24 @@ class Station(Node):
         self.resources.setdefault(source, {})
         self.resources[source].setdefault(type, 0)
         self.resources[source][type] += amount
+
+    def loadResource(self, type, amount):
+        for source, resources in self.resources.items():
+            if source is None:
+                continue
+            available = resources.get(type, 0)
+            load = min(available, amount)
+            resources[type] -= load
+            return load
+        return 0
+
+    def unloadResource(self, type, amount):
+        self.addResource(None, type, amount)
+
+    def acceptsResource(self, type):
+        for connection in self.connections:
+            if type in connection.consumes:
+                return True
 
 
 class Signal(Node):
@@ -373,10 +392,13 @@ class Graph:
 
 class Wagon(object):
     size = 0.5
+    loading_speed = 20
 
-    def __init__(self):
+    def __init__(self, type=0, capacity=10):
         self.x = self.y = 0
         self.edge = None
+        self.type, self.capacity = type, capacity
+        self.cargo = 0
 
     def draw(self):
         circle.x, circle.y = self.x * TILE_SIZE, self.y * TILE_SIZE
@@ -415,12 +437,15 @@ class Train(object):
             if self.pos >= 1:
                 if not self.path:
                     if self.end is self.destination:
-                        self.start = self.end = self.destination
-                        self.pos = 0
-                        self.destination, self.origin = self.origin, self.destination
-                        self.trail = []
-                        self.edge.busy.remove(self)
-                        self.dirty = True
+                        if not self.transferCargo(dt, self.end):
+                            self.start = self.end = self.destination
+                            self.pos = 0
+                            self.destination, self.origin = self.origin, self.destination
+                            self.trail = []
+                            self.edge.busy.remove(self)
+                            self.dirty = True
+                        else:
+                            self.pos = 1
                     else:
                         self.pos = 1
                 else:
@@ -455,6 +480,24 @@ class Train(object):
                 if point:
                     wagon.x, wagon.y = point
 
+    def transferCargo(self, dt, station):
+        working = False
+        for wagon in self.wagons:
+            if station.acceptsResource(wagon.type) and wagon.cargo > 0:
+                amount = min(wagon.cargo, dt * wagon.loading_speed)
+                station.unloadResource(wagon.type, amount)
+                wagon.cargo -= amount
+                working = True
+
+            space = wagon.capacity - wagon.cargo
+            if space > 0:
+                amount = station.loadResource(wagon.type, min(space, dt * wagon.loading_speed))
+                if amount:
+                    wagon.cargo += amount
+                    working = True
+
+        return working
+
     def getPointAlongPath(self, path, start, end, pos, distance):
         idx = 0
         edge = loop.graph.nodes_pairs[(start, end) if start.id < end.id else (end, start)]
@@ -480,6 +523,19 @@ class Train(object):
         circle.color = (1, 0, 0, 1)
         circle.render()
         [wagon.draw() for wagon in self.wagons]
+        cargo = {}
+        for wagon in self.wagons:
+            cargo[wagon.type] = cargo.get(wagon.type, 0) + wagon.cargo
+        if cargo:
+            text = "\n".join(["%s: %s" % (resource_types[type], int(amount)) for type, amount in cargo.items()])
+            self.text = pyglet.text.Label(text,
+                                          font_name='Courier',
+                                          font_size=9,
+                                          x=self.x * TILE_SIZE, y=self.y * TILE_SIZE + 10,
+                                          anchor_x='center', anchor_y='bottom', multiline=True,
+                                          width=60)
+            self.text.draw()
+
 
     def update(self, dt):
         self.updateCoords(dt)
@@ -828,6 +884,13 @@ class TraderTool(MouseTool):
         if not self.invalid:
             if not self.hover_node:
                 loop.createTrader(x, y, {0: 5}, [])
+            else:
+                if self.hover_node.produces:
+                    self.hover_node.produces = {}
+                    self.hover_node.consumes = [0]
+                else:
+                    self.hover_node.produces = {0: 5}
+                    self.hover_node.consumes = []
 
     def rightClick(self, x, y):
         if not self.invalid:
