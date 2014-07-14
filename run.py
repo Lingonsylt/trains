@@ -1,17 +1,13 @@
 # encoding: utf-8
 from collections import defaultdict
-import random
+import drawing
+from drawing import TILE_SIZE
 import utils
 import pyglet
 from pyglet.window import key, mouse
-import primitives
 
-TILE_SIZE = 20
 mouse.x = 0
 mouse.y = 0
-circle = primitives.Circle(100, 100, stroke=1, width=10, color=(255, 255, 0, 1))
-tiny_circle = primitives.Circle(100, 100, stroke=1, width=4, color=(255, 255, 0, 1))
-
 resource_types = {0: "goods"}
 
 
@@ -27,24 +23,7 @@ class Trader(object):
                 connection.supplyResource(self, type, rate * dt / len(self.connections))
 
     def draw(self):
-        circle.x, circle.y = self.x * TILE_SIZE, self.y * TILE_SIZE
-        circle.color = (0.5, 0.5, 0.5, 1)
-        circle.render()
-
-        text = ""
-        if self.produces:
-            text += "Prod: " + ", ".join(["%s (%s)" % (resource_types[type], amount) for type, amount in self.produces.items()])
-        if self.consumes:
-            if self.produces: text += "\n"
-            text += "Cons: " + ", ".join(["%s" % resource_types[item] for item in self.consumes])
-        if text:
-            self.text = pyglet.text.Label(text,
-                                          font_name='Courier',
-                                          font_size=9,
-                                          x=self.x * TILE_SIZE, y=self.y * TILE_SIZE - 10,
-                                          anchor_x='center', anchor_y='top', multiline=True,
-                                          width=150)
-            self.text.draw()
+        drawing.Trader_draw(resource_types, self.x, self.y, self.produces, self.consumes)
 
 
 class Node(object):
@@ -55,9 +34,7 @@ class Node(object):
         self.nbors = []
 
     def draw(self):
-        circle.x, circle.y = self.x * TILE_SIZE, self.y * TILE_SIZE
-        circle.color = (255, 255, 0, 1)
-        circle.render()
+        drawing.Node_draw(self.x, self.y)
 
     def isBusy(self):
         return any(loop.graph.getEdge(self, nbor).isBusy() for nbor in self.nbors)
@@ -76,21 +53,7 @@ class Station(Node):
         self.reach = 5
 
     def draw(self):
-        circle.x, circle.y = self.x * TILE_SIZE, self.y * TILE_SIZE
-        circle.color = (0, 1, 0, 1)
-        circle.render()
-
-        text = "\n".join(["%s->%s" % (source.id if source else "#",
-                                      ", ".join(["%s %s" % (resource_types[type], int(amount))
-                                                 for type, amount in resources.items()]))
-                          for source, resources in self.resources.items()])
-        self.text = pyglet.text.Label(text,
-                                      font_name='Courier',
-                                      font_size=9,
-                                      x=self.x * TILE_SIZE, y=self.y * TILE_SIZE - 10,
-                                      anchor_x='center', anchor_y='top', multiline=True,
-                                      width=150)
-        self.text.draw()
+        drawing.Station_draw(resource_types, self.x, self.y, self.resources)
 
     def supplyResource(self, source, type, amount):
         self.resources[source][type] += amount
@@ -135,29 +98,7 @@ class Signal(Node):
             self.nw = self.se = True
 
     def draw(self):
-        if self.nw is not None:
-            sx, sy = utils.getPointRelativeLine((self.x * TILE_SIZE, self.y * TILE_SIZE), (-5, -5),
-                                                (self.nw_node.x, self.nw_node.y),
-                                                (self.se_node.x, self.se_node.y))
-            tiny_circle.x = sx
-            tiny_circle.y = sy
-            if self.nw is True:
-                tiny_circle.color = (0, 255, 0, 1)
-            else:
-                tiny_circle.color = (255, 0, 0, 1)
-            tiny_circle.render()
-
-        if self.se is not None:
-            sx, sy = utils.getPointRelativeLine((self.x * TILE_SIZE, self.y * TILE_SIZE), (5, 5),
-                                                (self.nw_node.x, self.nw_node.y),
-                                                (self.se_node.x, self.se_node.y))
-            tiny_circle.x = sx
-            tiny_circle.y = sy
-            if self.se is True:
-                tiny_circle.color = (0, 255, 0, 1)
-            else:
-                tiny_circle.color = (255, 0, 0, 1)
-            tiny_circle.render()
+        drawing.Signal_draw(self.x, self.y, self.nw, self.se, self.nw_node, self.se_node)
 
 
 class SoberBoy:
@@ -224,13 +165,7 @@ class Edge:
         self.busy = []
 
     def draw(self):
-        line = primitives.Line((self.lnode.x * TILE_SIZE, self.lnode.y * TILE_SIZE),
-                               (self.hnode.x * TILE_SIZE, self.hnode.y * TILE_SIZE), stroke=1, color=(255, 255, 0, 1))
-        if self.isBusy():
-            line.color = (1, 0.5, 0, 1)
-        else:
-            line.color = (1, 1, 0, 1)
-        line.render()
+        drawing.Edge_draw(self.lnode, self.hnode, self.isBusy())
 
     def isBusy(self):  # Is there a train/wagon on this edge
         return bool(self.busy)
@@ -374,9 +309,7 @@ class Wagon(object):
         self.cargo = 0
 
     def draw(self):
-        circle.x, circle.y = self.x * TILE_SIZE, self.y * TILE_SIZE
-        circle.color = (0.8, 1, 0, 1)
-        circle.render()
+        drawing.Wagon_draw(self.x, self.y)
 
 
 class Train(object):
@@ -498,22 +431,7 @@ class Train(object):
                 return edge, start, end, (utils.getNodePointAlongLine(start, end, pos))
 
     def draw(self):
-        circle.x, circle.y = self.x * TILE_SIZE, self.y * TILE_SIZE
-        circle.color = (1, 0, 0, 1)
-        circle.render()
-        [wagon.draw() for wagon in self.wagons]
-        cargo = {}
-        for wagon in self.wagons:
-            cargo[wagon.type] = cargo.get(wagon.type, 0) + wagon.cargo
-        if cargo:
-            text = "\n".join(["%s: %s" % (resource_types[type], int(amount)) for type, amount in cargo.items()])
-            self.text = pyglet.text.Label(text,
-                                          font_name='Courier',
-                                          font_size=9,
-                                          x=self.x * TILE_SIZE, y=self.y * TILE_SIZE + 10,
-                                          anchor_x='center', anchor_y='bottom', multiline=True,
-                                          width=60)
-            self.text.draw()
+        drawing.Train_draw(resource_types, self.x, self.y, self.wagons)
 
     def update(self, dt):
         self.updateCoords(dt)
@@ -633,38 +551,8 @@ class TrainTool(MouseTool):
             self.last_node = None
 
     def draw(self, gui_anchor):
-        if self.last_node:
-            circle.x, circle.y = self.last_node.x * TILE_SIZE, self.last_node.y * TILE_SIZE
-            circle.color = (0.5, 0.5, 1, 1)
-            circle.render()
-
-        if self.hover_node:
-            circle.x, circle.y = self.hover_node.x * TILE_SIZE, self.hover_node.y * TILE_SIZE
-            if self.invalid:
-                circle.color = (1, 0, 0, 1)
-            else:
-                circle.color = (0.5, 0.5, 1, 1)
-            circle.render()
-
-        if self.hover_path:
-            last_node = self.last_node
-            for node in self.hover_path:
-                primitives.Line((last_node.x * TILE_SIZE, last_node.y * TILE_SIZE),
-                                (node.x * TILE_SIZE, node.y * TILE_SIZE), stroke=1,
-                                color=(0, 0, 1, 1)).render()
-                last_node = node
-
-        text = "\n".join(["%s New train (0)" % ("*" if self.active_train_num == 0 else " ")] +
-                         ["%s Train %s (%s)" % ("*" if self.active_train_num == n else " ", n, n)
-                          for n in range(1, len(loop.trains[:9]) + 1)])
-        text_x, text_y = gui_anchor
-        self.text = pyglet.text.Label(text,
-                                      font_name='Courier',
-                                      font_size=12,
-                                      x=text_x, y=text_y,
-                                      anchor_x='left', anchor_y='top', multiline=True,
-                                      width=window.width)
-        self.text.draw()
+        drawing.TrainTool_draw(window, gui_anchor, self.last_node, self.invalid, self.hover_node, self.hover_path,
+                               self.active_train_num, loop.trains)
 
     def keyRelease(self, symbol, modifiers):
         # 0: New train, 1-9: Activate existing train
@@ -775,17 +663,7 @@ class RouteTool(MouseTool):
             self.hover_pos = angle_x, angle_y
 
     def draw(self, gui_anchor):
-        circle.x, circle.y = self.hover_pos[0] * TILE_SIZE, self.hover_pos[1] * TILE_SIZE
-        if self.invalid:
-            circle.color = (1, 0, 0, 1)
-        else:
-            circle.color = (0.5, 0.5, 1, 1)
-        circle.render()
-
-        if self.last_node:
-            primitives.Line((self.last_node.x * TILE_SIZE, self.last_node.y * TILE_SIZE),
-                            (self.hover_pos[0] * TILE_SIZE, self.hover_pos[1] * TILE_SIZE), stroke=1,
-                            color=(0.5, 0.5, 0, 1)).render()
+        drawing.RouteTool_draw(self.hover_pos, self.invalid, self.last_node)
 
 
 class StationTool(MouseTool):
@@ -861,12 +739,7 @@ class StationTool(MouseTool):
             self.hover_pos = mouse.x, mouse.y
 
     def draw(self, gui_anchor):
-        circle.x, circle.y = self.hover_pos[0] * TILE_SIZE, self.hover_pos[1] * TILE_SIZE
-        if self.invalid:
-            circle.color = (1, 0, 0, 1)
-        else:
-            circle.color = (0.5, 0.5, 1, 1)
-        circle.render()
+        drawing.StationTool_draw(self.hover_pos, self.invalid)
 
 
 class TraderTool(MouseTool):
@@ -921,12 +794,7 @@ class TraderTool(MouseTool):
             self.hover_pos = mouse.x, mouse.y
 
     def draw(self, gui_anchor):
-        circle.x, circle.y = self.hover_pos[0] * TILE_SIZE, self.hover_pos[1] * TILE_SIZE
-        if self.invalid:
-            circle.color = (1, 0, 0, 1)
-        else:
-            circle.color = (0.5, 0.5, 1, 1)
-        circle.render()
+        drawing.TraderTool_draw(self.hover_pos, self.invalid)
 
 
 class SignalTool(MouseTool):
@@ -987,13 +855,7 @@ class SignalTool(MouseTool):
                     return
 
     def draw(self, gui_anchor):
-        if self.hover_pos:
-            circle.x, circle.y = self.hover_pos[0] * TILE_SIZE, self.hover_pos[1] * TILE_SIZE
-            if self.invalid:
-                circle.color = (1, 0, 0, 1)
-            else:
-                circle.color = (0.5, 0.5, 1, 1)
-            circle.render()
+        drawing.SignalTool_draw(self.hover_pos, self.invalid)
 
 
 class Toolbox:
