@@ -11,6 +11,40 @@ mouse.y = 0
 circle = primitives.Circle(100, 100, stroke=1, width=10, color=(255, 255, 0, 1))
 tiny_circle = primitives.Circle(100, 100, stroke=1, width=4, color=(255, 255, 0, 1))
 
+resource_types = {0: "goods"}
+
+
+class Trader(object):
+    def __init__(self, id, x, y, produces, consumes):
+        self.id, self.x, self.y, self.produces, self.consumes = id, x, y, produces, consumes
+        self.connections = []
+        self.delete = False
+
+    def update(self, dt):
+        for connection in self.connections:
+            for type, rate in self.produces.items():
+                connection.addResource(self, type, rate * dt / len(self.connections))
+        print self.connections
+
+    def draw(self):
+        circle.x, circle.y = self.x * TILE_SIZE, self.y * TILE_SIZE
+        circle.color = (0.5, 0.5, 0.5, 1)
+        circle.render()
+
+        text = ""
+        if self.produces:
+            text += "Prod: " + ", ".join(["%s (%s)" % (resource_types[type], amount) for type, amount in self.produces.items()])
+        if self.consumes:
+            text += "\nCons: " + ", ".join(["%s (%s)" % item for item in self.consumes])
+        if text:
+            self.text = pyglet.text.Label(text,
+                                          font_name='Courier',
+                                          font_size=9,
+                                          x=self.x * TILE_SIZE, y=self.y * TILE_SIZE - 10,
+                                          anchor_x='center', anchor_y='top', multiline=True,
+                                          width=150)
+            self.text.draw()
+
 
 class Node(object):
     type = object()
@@ -40,11 +74,31 @@ class Station(Node):
 
     def __init__(self, id, x, y):
         super(Station, self).__init__(id, x, y)
+        self.resources = {}
+        self.connections = []
+        self.reach = 5
 
     def draw(self):
         circle.x, circle.y = self.x * TILE_SIZE, self.y * TILE_SIZE
         circle.color = (0, 1, 0, 1)
         circle.render()
+
+        text = "\n".join(["%s->%s" % (source.id,
+                                      ", ".join(["%s %s" % (resource_types[type], int(amount))
+                                                 for type, amount in resources.items()]))
+                          for source, resources in self.resources.items()])
+        self.text = pyglet.text.Label(text,
+                                      font_name='Courier',
+                                      font_size=9,
+                                      x=self.x * TILE_SIZE, y=self.y * TILE_SIZE - 10,
+                                      anchor_x='center', anchor_y='top', multiline=True,
+                                      width=150)
+        self.text.draw()
+
+    def addResource(self, source, type, amount):
+        self.resources.setdefault(source, {})
+        self.resources[source].setdefault(type, 0)
+        self.resources[source][type] += amount
 
 
 class Signal(Node):
@@ -208,6 +262,8 @@ class Graph:
         self.next_node_id += 1
         self.nodes[node.id] = node
         self.nodes_list.append(node)
+        if node.type is Station.type:
+            loop.stations_created.append(node)
         return node
 
     def connectNodes(self, from_, to):
@@ -263,6 +319,8 @@ class Graph:
             if node in nbor.nbors:
                 nbor.nbors.remove(node)
                 loop.graph.prune(nbor)
+        if node.type is Station.type:
+            loop.stations_deleted.append(node)
 
     def deleteEdge(self, from_, to):
         self.dirty = True
@@ -725,6 +783,58 @@ class StationTool(MouseTool):
         circle.render()
 
 
+class TraderTool(MouseTool):
+    id = "trader"
+    name = "Trader"
+
+    def reset(self):
+        self.hover_pos = (0, 0)
+        self.hover_edge = None
+        self.hover_node = None
+        self.invalid = True
+
+    def click(self, x, y):
+        if not self.invalid:
+            if not self.hover_node:
+                loop.createTrader(x, y, {0: 5}, [])
+
+    def rightClick(self, x, y):
+        if not self.invalid:
+            if self.hover_node:
+                loop.deleteTrader(self.hover_node)
+
+    def updateHover(self):
+        self.invalid = False
+        self.hover_edge = None
+        self.hover_node = None
+        self.hover_pos = None
+
+        snap_node = None
+        for node in loop.traders:
+            dist = utils.getDistance((mouse.x, mouse.y), (node.x, node.y))
+
+            if dist == 0:
+                if snap_node is None:
+                    snap_node = (dist, node)
+                elif dist < snap_node[0]:
+                    snap_node = (dist, node)
+
+        if snap_node:
+            self.hover_pos = snap_node[1].x, snap_node[1].y
+            self.hover_edge = None
+            self.hover_node = snap_node[1]
+        else:
+            self.hover_pos = mouse.x, mouse.y
+
+    def draw(self, gui_anchor):
+        circle.x, circle.y = self.hover_pos[0] * TILE_SIZE, self.hover_pos[1] * TILE_SIZE
+        if self.invalid:
+            circle.color = (1, 0, 0, 1)
+        else:
+            circle.color = (0.5, 0.5, 1, 1)
+        circle.render()
+
+
 class SignalTool(MouseTool):
     id = "signal"
     name = "Signal"
@@ -738,7 +848,7 @@ class SignalTool(MouseTool):
     def click(self, x, y):
         if not self.invalid:
             if self.hover_edge:
-                loop.graph.insertNode(self.hover_pos, *self.hover_edge, signal=True)
+                loop.graph.insertNode(self.hover_pos, *self.hover_edge, type=Signal.type)
             elif self.hover_node:
                 self.hover_node.toggleDirection()
 
@@ -796,13 +906,14 @@ class Toolbox:
         key.W: SignalTool.id,
         key.E: TrainTool.id,
         key.R: StationTool.id,
+        key.A: TraderTool.id,
     }
 
     inv_keymap = {id: key for key, id in keymap.items()}
-    keynames = {key.Q: "Q", key.W: "W", key.E: "E", key.R: "R"}
+    keynames = {key.Q: "Q", key.W: "W", key.E: "E", key.R: "R", key.A: "A"}
 
     def __init__(self):
-        self.ordered_tools = [RouteTool(), SignalTool(), TrainTool(), StationTool()]
+        self.ordered_tools = [RouteTool(), SignalTool(), TrainTool(), StationTool(), TraderTool()]
         self.tools = {tool.id: tool for tool in self.ordered_tools}
         self.active_tool = None
         self.text = None
@@ -856,17 +967,20 @@ class Loop:
         self.graph = Graph()
         self.pathfinder = SoberBoy(self.graph)
         self.trains = []
+        self.traders = []
+        self.next_trader_id = 0
+        self.traders_dirty = False
+        self.stations_created = []
+        self.stations_deleted = []
 
     def draw(self):
+        [trader.draw() for trader in self.traders]
         [edge.draw() for edge in self.graph.nodes_pairs.values()]
         [node.draw() for node in self.graph.nodes_list]
         self.toolbox.draw()
         [train.draw() for train in self.trains]
 
     def update(self, dt):
-        [train.update(dt) for train in self.trains]
-        self.toolbox.update(dt)
-
         if self.graph.dirty:
             for train in self.trains:
                 train.newPath(self.pathfinder.getPath(train))
@@ -878,6 +992,52 @@ class Loop:
                     train.newPath(self.pathfinder.getPath(train))
                     train.dirty = False
 
+        self.updateConnections()
+
+        [train.update(dt) for train in self.trains]
+        [trader.update(dt) for trader in self.traders]
+        self.toolbox.update(dt)
+
+    def createTrader(self, x, y, produces, consumes):
+        self.traders_dirty = True
+        self.traders.append(Trader(self.next_trader_id, x, y, produces, consumes))
+        self.next_trader_id += 1
+
+    def deleteTrader(self, trader):
+        self.traders_dirty = True
+        trader.delete = True
+
+    def updateConnections(self):
+        if self.traders_dirty:
+            for trader in self.traders:
+                for station in self.graph.nodes_list:
+                    if station.type is not Station.type:
+                        continue
+                    if trader.delete and trader in station.connections:
+                        station.connections.remove(trader)
+                    if not trader.delete and utils.getDistance((trader.x, trader.y), (station.x, station.y)) < station.reach:
+                        if not trader in station.connections:
+                            station.connections.append(trader)
+                        if not station in trader.connections:
+                            trader.connections.append(station)
+                if trader.delete:
+                    self.traders.remove(trader)
+
+            self.traders_dirty = False
+        else:
+            if self.stations_created:
+                for station in self.stations_created:
+                    for trader in self.traders:
+                        if utils.getDistance((trader.x, trader.y), (station.x, station.y)) < station.reach:
+                            trader.connections.append(station)
+                            station.connections.append(trader)
+                self.stations_created = []
+
+            if self.stations_deleted:
+                for station in self.stations_deleted:
+                    for connection in station.connections:
+                        connection.remove(station)
+                self.stations_deleted = []
 loop = Loop()
 
 @window.event
@@ -912,7 +1072,3 @@ def update(dt):
 
 pyglet.clock.schedule_interval(update, 1/120.0)
 pyglet.app.run()
-
-# Ta bort ordentligt
-# Visa signalerna bättre i guit
-# Add the mighty pathfinder
