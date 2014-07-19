@@ -7,6 +7,7 @@ TILE_SIZE = 20
 
 circle = primitives.Circle(100, 100, stroke=1, width=10, color=(255, 255, 0, 1))
 tiny_circle = primitives.Circle(100, 100, stroke=1, width=4, color=(255, 255, 0, 1))
+tiny_circle_filled = primitives.Circle(100, 100, stroke=0, width=4, color=(255, 255, 0, 1))
 
 
 def Trader_draw(resource_types, x, y, produces, consumes):
@@ -65,6 +66,13 @@ def Signal_draw(x, y, nw, se, nw_node, se_node):
             tiny_circle.color = (255, 0, 0, 1)
         tiny_circle.render()
 
+        sbx, sby = utils.getPointRelativeLine((x * TILE_SIZE, y * TILE_SIZE), (-6, -5),
+                                              (nw_node.x, nw_node.y),
+                                              (se_node.x, se_node.y))
+        tiny_circle_filled.x, tiny_circle_filled.y = sbx, sby
+        tiny_circle_filled.color = (0.3, 0.3, 0.3, 1)
+        tiny_circle_filled.render()
+
     if se is not None:
         sx, sy = utils.getPointRelativeLine((x * TILE_SIZE, y * TILE_SIZE), (5, 5),
                                             (nw_node.x, nw_node.y),
@@ -76,6 +84,13 @@ def Signal_draw(x, y, nw, se, nw_node, se_node):
         else:
             tiny_circle.color = (255, 0, 0, 1)
         tiny_circle.render()
+
+        sbx, sby = utils.getPointRelativeLine((x * TILE_SIZE, y * TILE_SIZE), (6, 5),
+                                              (nw_node.x, nw_node.y),
+                                              (se_node.x, se_node.y))
+        tiny_circle_filled.x, tiny_circle_filled.y = sbx, sby
+        tiny_circle_filled.color = (0.3, 0.3, 0.3, 1)
+        tiny_circle_filled.render()
 
 
 def Edge_draw(lnode, hnode, is_busy):
