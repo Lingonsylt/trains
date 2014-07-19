@@ -40,7 +40,7 @@ def getPointRelativeLine(start_point, relative_point, line_start, line_end):
     line_delta = tuple(x - y for x, y in zip(line_start, line_end))
     line_angle = math.atan2(*line_delta) * 180 / math.pi
     offset_x = (x * math.sin(line_angle * (math.pi / 180)) + y * math.sin((line_angle - 90) * (math.pi / 180)))
-    offset_y = (y * math.cos(line_angle * (math.pi / 180)) + y * math.cos((line_angle - 90) * (math.pi / 180)))
+    offset_y = (x * math.cos(line_angle * (math.pi / 180)) + y * math.cos((line_angle - 90) * (math.pi / 180)))
     return start_point[0] + offset_x, start_point[1] + offset_y
 
 
