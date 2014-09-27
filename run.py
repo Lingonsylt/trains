@@ -164,6 +164,17 @@ class Edge:
         self.length = utils.getNodeDistance(lnode, hnode)
         self.busy = []
 
+    def addOccupant(self, occupant):
+        if not self.busy:
+            loop.signals_dirty = True
+        self.busy.append(occupant)
+
+    def removeOccupant(self, occupant):
+        if occupant in self.busy:
+            self.busy.remove(occupant)
+        if not self.busy:
+            loop.signals_dirty = True
+
     def draw(self):
         drawing.Edge_draw(self.lnode, self.hnode, self.isBusy())
 
@@ -313,7 +324,7 @@ class Wagon(object):
 
 
 class Train(object):
-    speed = 20
+    speed = 5
     size = 0.5
 
     def __init__(self, edge, start, destination):
@@ -350,7 +361,7 @@ class Train(object):
                             self.pos = 0
                             self.destination, self.origin = self.origin, self.destination
                             self.trail = []
-                            self.edge.busy.remove(self)
+                            self.edge.removeOccupant(self)
                             self.dirty = True
                         else:
                             self.pos = 1  # Wait while transferring cargo
@@ -366,9 +377,9 @@ class Train(object):
                     del self.path[0]
                     new_edge = loop.graph.getEdge(self.start, self.end)
                     self.pos = (self.pos * self.edge.length - self.edge.length) / new_edge.length
-                    self.edge.busy.remove(self)
+                    self.edge.removeOccupant(self)
                     self.edge = new_edge
-                    self.edge.busy.append(self)
+                    self.edge.addOccupant(self)
 
             # Update the position of the train based on its pos on the edge
             self.x, self.y = utils.getNodePointAlongLine(self.start, self.end, self.pos)
@@ -385,11 +396,11 @@ class Train(object):
                 # Update busy state and clean trail if last wagon
                 if wagon.edge != edge:
                     if wagon.edge:
-                        wagon.edge.busy.remove(wagon)
+                        wagon.edge.removeOccupant(wagon)
                         if self.trail and i == len(self.wagons) - 1:
                             del self.trail[0]
                     wagon.edge = edge
-                    edge.busy.append(wagon)
+                    edge.addOccupant(wagon)
 
                 if point:
                     wagon.x, wagon.y = point
@@ -441,7 +452,7 @@ class Train(object):
             if self.start is self.end:  # Newly created, has no direction/edge yet
                 self.end = path[0]
                 self.edge = loop.graph.getEdge(self.start, self.end)
-                self.edge.busy.append(self)
+                self.edge.addOccupant(self)
 
             if self.end is path[0]:
                 del path[0]
@@ -930,6 +941,7 @@ class Loop:
         self.traders_dirty = False
         self.stations_created = []
         self.stations_deleted = []
+        self.signals_dirty = False
 
     def draw(self):
         [trader.draw() for trader in self.traders]
@@ -939,6 +951,36 @@ class Loop:
         [train.draw() for train in self.trains]
 
     def update(self, dt):
+        if self.signals_dirty or self.graph.dirty:
+            for node in self.graph.nodes:
+                if node.type is not Signal.type:
+                    continue
+                for sigdir, other_sigdir, signbor in (('nw', 'se', node.nw_node), ('se', 'nw', node.se_node)):
+                    if getattr(node, other_sigdir) is not None:
+                        setattr(node, other_sigdir, True)
+                        edge = loop.graph.getEdge(node, signbor)
+                        if edge.isBusy():
+                            setattr(node, other_sigdir, False)
+                            continue
+                        if signbor.type is Signal.type:
+                            continue
+                        todo = [(signbor, node)]
+                        while todo:
+                            item, last_node = todo.pop()
+                            for nbor in item.nbors:
+                                if nbor is last_node:
+                                    continue
+                                if loop.graph.getEdge(item, nbor).isBusy():
+                                    setattr(node, other_sigdir, False)
+                                    todo = None  # Break out of while-loop
+                                    break  # Break out of for-loop
+                                if nbor.type is Signal.type:
+                                    if (nbor.nw_node is last_node and nbor.se is not None) or \
+                                       (nbor.se_node is last_node and nbor.nw is not None):
+                                        continue
+                                todo.append((nbor, item))
+            self.signals_dirty = False
+
         if self.graph.dirty:
             for train in self.trains:
                 train.newPath(self.pathfinder.getPath(train))
