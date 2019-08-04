@@ -117,6 +117,9 @@ def Train_draw(resource_types, x, y, wagons):
     cargo = {}
     for wagon in wagons:
         cargo[wagon.type] = cargo.get(wagon.type, 0) + wagon.cargo
+
+    # TODO: Enable cargo drawing
+    return
     if cargo:
         text = "\n".join(["%s: %s" % (resource_types[type], int(amount)) for type, amount in cargo.items()])
         pyglet.text.Label(text,

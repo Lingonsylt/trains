@@ -1,2 +1,5 @@
 trains
 ======
+```
+pip install pyglet
+```

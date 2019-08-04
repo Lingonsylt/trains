@@ -5,6 +5,7 @@ from drawing import TILE_SIZE
 import utils
 import pyglet
 from pyglet.window import key, mouse
+import cPickle as pickle
 
 mouse.x = 0
 mouse.y = 0
@@ -48,7 +49,7 @@ class Station(Node):
 
     def __init__(self, id, x, y):
         super(Station, self).__init__(id, x, y)
-        self.resources = defaultdict(lambda: defaultdict(lambda: 0))
+        self.resources = {}
         self.connections = []
         self.reach = 5
 
@@ -56,6 +57,10 @@ class Station(Node):
         drawing.Station_draw(resource_types, self.x, self.y, self.resources)
 
     def supplyResource(self, source, type, amount):
+        if source not in self.resources:
+            self.resources[source] = {}
+        if type not in self.resources[source]:
+            self.resources[source][type] = 0
         self.resources[source][type] += amount
 
     def loadResource(self, type, amount):
@@ -353,7 +358,9 @@ class Train(object):
             self.pos += (self.speed * dt) / self.edge.length
             # Move to new edge, or we're at our goal
             if self.pos >= 1:
-                if not self.path:
+                if self.shouldStopForSignal():
+                    self.pos = 1
+                elif not self.path:
                     # We have reached our goal. Transfer cargo or head to origin
                     if self.end is self.destination:
                         if not self.transferCargo(dt, self.end):  # Transfer cargo if available, then head to origin
@@ -404,6 +411,16 @@ class Train(object):
 
                 if point:
                     wagon.x, wagon.y = point
+
+    def shouldStopForSignal(self):
+        if self.end.type is Signal.type:
+            if self.start == self.end.nw_node and self.end.nw is not None and not self.end.nw:
+                return True
+
+            if self.start == self.end.se_node and self.end.se is not None and not self.end.se:
+                return True
+
+        return False
 
     def transferCargo(self, dt, station):
         working = False  # If loading/unloading, signal to chill at station
@@ -809,6 +826,31 @@ class TraderTool(MouseTool):
         drawing.TraderTool_draw(self.hover_pos, self.invalid)
 
 
+class SaveTool(MouseTool):
+    id = "save"
+    name = "Save"
+
+    def __init__(self, loop):
+        super(SaveTool, self).__init__()
+        self.loop = loop
+
+    def click(self, x, y):
+        print "SaveTool"
+        pickle.dump((loop.graph, loop.trains), open("trains.dump", "w"))
+
+
+class LoadTool(MouseTool):
+    id = "load"
+    name = "Load"
+
+    def click(self, x, y):
+        print "LoadTool"
+        loop.graph, loop.trains = pickle.load(open("trains.dump", "r"))
+        loop.pathfinder.graph = loop.graph
+        loop.graph.dirty = True
+        loop.signals_dirty = True
+
+
 class SignalTool(MouseTool):
     id = "signal"
     name = "Signal"
@@ -876,13 +918,15 @@ class Toolbox:
         key.E: TrainTool.id,
         key.R: StationTool.id,
         key.A: TraderTool.id,
+        key.S: SaveTool.id,
+        key.L: LoadTool.id,
     }
 
     inv_keymap = {id: key for key, id in keymap.items()}
-    keynames = {key.Q: "Q", key.W: "W", key.E: "E", key.R: "R", key.A: "A"}
+    keynames = {key.Q: "Q", key.W: "W", key.E: "E", key.R: "R", key.A: "A", key.S: "S", key.L: "L"}
 
-    def __init__(self):
-        self.ordered_tools = [RouteTool(), SignalTool(), TrainTool(), StationTool(), TraderTool()]
+    def __init__(self, loop):
+        self.ordered_tools = [RouteTool(), SignalTool(), TrainTool(), StationTool(), TraderTool(), SaveTool(loop), LoadTool()]
         self.tools = {tool.id: tool for tool in self.ordered_tools}
         self.active_tool = None
         self.text = None
@@ -932,7 +976,7 @@ except pyglet.window.NoSuchConfigException:
 
 class Loop:
     def __init__(self):
-        self.toolbox = Toolbox()
+        self.toolbox = Toolbox(self)
         self.graph = Graph()
         self.pathfinder = SoberBoy(self.graph)
         self.trains = []
@@ -956,29 +1000,32 @@ class Loop:
                 if node.type is not Signal.type:
                     continue
                 for sigdir, other_sigdir, signbor in (('nw', 'se', node.nw_node), ('se', 'nw', node.se_node)):
+                    # If there is a also a light in the opposing direction
                     if getattr(node, other_sigdir) is not None:
+
+                        # Initialize opposing to green
                         setattr(node, other_sigdir, True)
-                        edge = loop.graph.getEdge(node, signbor)
-                        if edge.isBusy():
-                            setattr(node, other_sigdir, False)
-                            continue
-                        if signbor.type is Signal.type:
-                            continue
-                        todo = [(signbor, node)]
+
+                        visited = []
+                        todo = [(node, signbor)]
+
+                        # Set signal to red if any connected edge is busy
                         while todo:
-                            item, last_node = todo.pop()
-                            for nbor in item.nbors:
-                                if nbor is last_node:
-                                    continue
-                                if loop.graph.getEdge(item, nbor).isBusy():
-                                    setattr(node, other_sigdir, False)
-                                    todo = None  # Break out of while-loop
-                                    break  # Break out of for-loop
-                                if nbor.type is Signal.type:
-                                    if (nbor.nw_node is last_node and nbor.se is not None) or \
-                                       (nbor.se_node is last_node and nbor.nw is not None):
-                                        continue
-                                todo.append((nbor, item))
+                            current_node, next_node = todo.pop()
+
+                            # If an edge is busy, stop looking
+                            if loop.graph.getEdge(current_node, next_node).isBusy():
+                                # Set signal to red
+                                setattr(node, other_sigdir, False)
+                                break
+
+                            visited.append(current_node)
+
+                            if next_node.type is not Signal.type:
+                                for nbor in next_node.nbors:
+                                    if nbor not in visited:
+                                        todo.append((next_node, nbor))
+
             self.signals_dirty = False
 
         if self.graph.dirty:
@@ -1020,9 +1067,9 @@ class Loop:
 
                     # Make sure nodes within reach are connected
                     if not trader.delete and utils.getNodeDistance(trader, station) < station.reach:
-                        if not trader in station.connections:
+                        if trader not in station.connections:
                             station.connections.append(trader)
-                        if not station in trader.connections:
+                        if station not in trader.connections:
                             trader.connections.append(station)
                 if trader.delete:
                     self.traders.remove(trader)
